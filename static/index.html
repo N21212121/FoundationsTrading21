@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Foundations Trading</title>
+<style>
+  :root {
+    --navy: #0a1430; --navy-2: #111d40; --navy-3: #1a2a55;
+    --scarlet: #b22030; --scarlet-bright: #e03545;
+    --text: #e8ecf4; --text-dim: #8a93a8;
+    --green: #2fae6e; --red: #d9534f; --border: #243458;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--navy); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── Top bar ── */
+  #topbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 18px; background: var(--navy-2);
+    border-bottom: 2px solid var(--scarlet);
+  }
+  #topbar h1 { font-size: 17px; color: var(--scarlet-bright); letter-spacing: 1px; }
+  .tab {
+    padding: 6px 14px; cursor: pointer; border-radius: 4px;
+    color: var(--text-dim); user-select: none;
+  }
+  .tab.active { background: var(--navy-3); color: var(--text); }
+  #status { margin-left: auto; display: flex; gap: 14px; align-items: center;
+            font-size: 12.5px; color: var(--text-dim); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+         margin-right: 5px; background: var(--red); }
+  .dot.on { background: var(--green); }
+  #engineBtn {
+    padding: 5px 12px; border-radius: 4px; border: 1px solid var(--border);
+    background: var(--navy-3); color: var(--text-dim); cursor: pointer;
+    font-size: 12.5px;
+  }
+  #engineBtn.armed { background: var(--scarlet); color: #fff;
+                     border-color: var(--scarlet-bright); }
+
+  /* ── Grid ── */
+  #dash {
+    flex: 1; display: grid; gap: 12px; padding: 12px;
+    grid-template-columns: 1fr 2fr;
+    grid-template-rows: 1fr 1fr;
+    grid-template-areas: "details chart" "trade positions";
+    min-height: 0;
+  }
+  .card {
+    background: var(--navy-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; overflow: auto; min-height: 0;
+  }
+  .card h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--text-dim); margin-bottom: 10px;
+    border-bottom: 1px solid var(--border); padding-bottom: 7px;
+  }
+  #card-details { grid-area: details; }
+  #card-chart { grid-area: chart; display: flex; flex-direction: column; }
+  #card-trade { grid-area: trade; }
+  #card-positions { grid-area: positions; }
+
+  /* ── Details ── */
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px;
+        font-size: 13px; }
+  .kv .k { color: var(--text-dim); }
+  .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet-bright);
+                   text-transform: uppercase; letter-spacing: 1px; }
+  .pl-pos { color: var(--green); } .pl-neg { color: var(--red); }
+
+  /* ── Chart ── */
+  #chartCanvas { flex: 1; min-height: 0; width: 100%; }
+  #chartHead { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
+  #chartTicker { font-size: 16px; font-weight: 600; }
+  #chartPrice { color: var(--text-dim); }
+
+  /* ── Trade card ── */
+  .form-row { display: flex; gap: 8px; margin-bottom: 9px; align-items: center; }
+  input, select {
+    background: var(--navy); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 6px 9px; font-size: 13px;
+  }
+  input[type=text] { width: 90px; text-transform: uppercase; }
+  input[type=number] { width: 80px; }
+  button {
+    background: var(--navy-3); border: 1px solid var(--border); color: var(--text);
+    border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--scarlet); }
+  button.buy { background: var(--scarlet); border-color: var(--scarlet-bright); }
+  button.sell { background: var(--navy); }
+  #tradeMsg { font-size: 12.5px; color: var(--text-dim); min-height: 18px;
+              margin-top: 6px; }
+
+  /* ── Positions table ── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500;
+       font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
+       padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 8px; border-bottom: 1px solid rgba(36,52,88,0.5);
+       font-variant-numeric: tabular-nums; }
+  tr.pos-row { cursor: pointer; }
+  tr.pos-row:hover { background: var(--navy-3); }
+  tr.pos-row.selected { background: var(--navy-3);
+                        border-left: 3px solid var(--scarlet); }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>FOUNDATIONS</h1>
+  <div class="tab active">Dashboard</div>
+  <div class="tab" title="next build pass">Trade Logs</div>
+  <div class="tab" title="next build pass">Performance</div>
+  <div class="tab" title="next build pass">Setup</div>
+  <div id="status">
+    <span><span class="dot" id="connDot"></span><span id="connText">…</span></span>
+    <span id="acctEquity"></span>
+    <button id="engineBtn" onclick="toggleEngine()">ENGINE: OBSERVE</button>
+  </div>
+</div>
+
+<div id="dash">
+  <div class="card" id="card-details">
+    <h2>Position Details</h2>
+    <div id="detailsBody"><span style="color:var(--text-dim)">
+      Select a ticker from Portfolio Positions.</span></div>
+  </div>
+
+  <div class="card" id="card-chart">
+    <div id="chartHead">
+      <span id="chartTicker">—</span><span id="chartPrice"></span>
+    </div>
+    <canvas id="chartCanvas"></canvas>
+  </div>
+
+  <div class="card" id="card-trade">
+    <h2>Manual Trade / Watchlist</h2>
+    <div class="form-row">
+      <input type="text" id="tTicker" placeholder="TICKER">
+      <select id="tDirection">
+        <option value="long">Long</option>
+        <option value="short">Short</option>
+      </select>
+      <select id="tSleeve">
+        <option value="combo">Combo</option>
+        <option value="shares">Shares only</option>
+        <option value="options">Options only</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label style="color:var(--text-dim);font-size:12.5px">Dollars
+        (blank = allocation)</label>
+      <input type="number" id="tDollars" placeholder="auto">
+    </div>
+    <div class="form-row">
+      <button class="buy" onclick="manualBuy()">BUY</button>
+      <button class="sell" onclick="manualSell()">SELL selected</button>
+    </div>
+    <div class="section-label">Watchlist</div>
+    <div class="form-row">
+      <input type="text" id="wTicker" placeholder="TICKER">
+      <input type="number" id="wAlloc" placeholder="alloc %" value="5">
+      <button onclick="addWatch()">Add</button>
+      <button onclick="removeWatch()">Remove</button>
+    </div>
+    <div id="watchList" style="font-size:12.5px;color:var(--text-dim)"></div>
+    <div id="tradeMsg"></div>
+  </div>
+
+  <div class="card" id="card-positions">
+    <h2>Portfolio Positions</h2>
+    <table>
+      <thead><tr>
+        <th>Ticker</th><th>Dir</th><th>Shares</th><th>Contracts</th>
+        <th>Opened</th>
+      </tr></thead>
+      <tbody id="posBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let selected = null;
+let engineOn = false;
+let chart = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts ? {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(opts)
+  } : undefined);
+  return r.json();
+}
+
+/* ── health / status strip ── */
+async function refreshHealth() {
+  try {
+    const h = await api('/api/health');
+    $('connDot').className = 'dot' + (h.connected ? ' on' : '');
+    $('connText').textContent = h.connected
+      ? (h.paper ? 'paper' : 'LIVE') : 'disconnected';
+    engineOn = h.engine_enabled;
+    const b = $('engineBtn');
+    b.textContent = engineOn ? 'ENGINE: ARMED' : 'ENGINE: OBSERVE';
+    b.className = engineOn ? 'armed' : '';
+    if (h.connected) {
+      const a = await api('/api/account');
+      if (a.equity) $('acctEquity').textContent =
+        '$' + a.equity.toLocaleString(undefined, {maximumFractionDigits: 0});
+    }
+  } catch (e) { $('connText').textContent = 'backend down'; }
+}
+
+async function toggleEngine() {
+  const want = !engineOn;
+  if (want && !confirm(
+    'ARM the engine? It will place real (paper) orders on signals.'))
+    return;
+  await api('/api/engine', {enabled: want});
+  refreshHealth();
+}
+
+/* ── positions ── */
+async function refreshPositions() {
+  const pos = await api('/api/positions');
+  const tb = $('posBody');
+  tb.innerHTML = '';
+  for (const [ticker, p] of Object.entries(pos)) {
+    const tr = document.createElement('tr');
+    tr.className = 'pos-row' + (ticker === selected ? ' selected' : '');
+    tr.onclick = () => { selected = ticker; refreshAll(); };
+    tr.innerHTML = `<td>${ticker}</td><td>${p.direction || ''}</td>` +
+      `<td>${p.shares || 0}</td><td>${p.option_contracts || 0}</td>` +
+      `<td>${(p.opened_at || '').slice(5, 16)}</td>`;
+    tb.appendChild(tr);
+  }
+  if (selected && pos[selected]) renderDetails(selected, pos[selected]);
+}
+
+function renderDetails(ticker, p) {
+  let h = '';
+  if (p.option_contracts > 0) {
+    h += `<div class="section-label">Options</div><div class="kv">` +
+      `<span class="k">Symbol</span><span class="v">${p.option_symbol}</span>` +
+      `<span class="k">Type</span><span class="v">${p.option_type || ''}</span>` +
+      `<span class="k">Contracts</span><span class="v">${p.option_contracts}</span>` +
+      `<span class="k">Entry premium</span><span class="v">$${(p.option_entry_premium || 0).toFixed(2)}</span>` +
+      `<span class="k">Peak premium</span><span class="v">$${(p.peak_premium || 0).toFixed(2)}</span>` +
+      `</div>`;
+  }
+  if (p.shares > 0) {
+    h += `<div class="section-label">Shares</div><div class="kv">` +
+      `<span class="k">Qty</span><span class="v">${p.shares}</span>` +
+      `<span class="k">Entry</span><span class="v">$${(p.share_entry_price || 0).toFixed(2)}</span>` +
+      `</div>`;
+  }
+  h += `<div class="section-label">Position</div><div class="kv">` +
+    `<span class="k">Direction</span><span class="v">${p.direction || ''}</span>` +
+    `<span class="k">Opened</span><span class="v">${p.opened_at || ''}</span>` +
+    `</div>`;
+  $('detailsBody').innerHTML = h;
+  $('chartTicker').textContent = ticker;
+  drawChart(ticker);
+}
+
+/* ── chart: lightweight candle render on canvas, no library yet ── */
+async function drawChart(ticker) {
+  // Bars come via a tiny passthrough we'll add when the chart gets real.
+  // For this pass: placeholder grid so layout is reviewable.
+  const cv = $('chartCanvas');
+  const ctx = cv.getContext('2d');
+  cv.width = cv.clientWidth; cv.height = cv.clientHeight;
+  ctx.fillStyle = '#111d40'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#243458';
+  for (let x = 0; x < cv.width; x += 60) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
+  }
+  for (let y = 0; y < cv.height; y += 40) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cv.width, y); ctx.stroke();
+  }
+  ctx.fillStyle = '#8a93a8'; ctx.font = '13px Segoe UI';
+  ctx.fillText('chart: next build pass (candles + EMA clouds)', 16, 26);
+}
+
+/* ── manual trade ── */
+async function manualBuy() {
+  const body = {
+    ticker: $('tTicker').value.trim().toUpperCase(),
+    direction: $('tDirection').value,
+    sleeve: $('tSleeve').value,
+  };
+  const d = $('tDollars').value;
+  if (d) body.dollars = parseFloat(d);
+  const r = await api('/api/manual/buy', body);
+  $('tradeMsg').textContent = r.ok
+    ? `submitted: ${r.filled} leg(s) filled, ${r.failed} failed`
+    : `rejected: ${r.reason}`;
+  refreshPositions();
+}
+
+async function manualSell() {
+  if (!selected) { $('tradeMsg').textContent = 'select a position first'; return; }
+  const r = await api('/api/manual/sell', {ticker: selected, sleeve: 'both'});
+  $('tradeMsg').textContent = r.ok ? 'sell submitted' : `rejected: ${r.reason}`;
+  selected = null;
+  refreshPositions();
+}
+
+/* ── watchlist ── */
+async function refreshWatch() {
+  const w = await api('/api/watchlist');
+  $('watchList').textContent = w.length
+    ? w.map(x => `${x.ticker} (${x.allocation_pct}%)`).join('  ·  ')
+    : 'empty';
+}
+async function addWatch() {
+  await api('/api/watchlist', {action: 'add',
+    ticker: $('wTicker').value.trim().toUpperCase(),
+    allocation_pct: parseFloat($('wAlloc').value || 5)});
+  refreshWatch();
+}
+async function removeWatch() {
+  await api('/api/watchlist', {action: 'remove',
+    ticker: $('wTicker').value.trim().toUpperCase()});
+  refreshWatch();
+}
+
+/* ── boot ── */
+function refreshAll() { refreshHealth(); refreshPositions(); refreshWatch(); }
+refreshAll();
+setInterval(refreshHealth, 5000);
+setInterval(refreshPositions, 10000);
+</script>
+</body>
+</html>
