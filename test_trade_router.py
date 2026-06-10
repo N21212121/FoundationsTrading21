@@ -184,7 +184,8 @@ def test_premium_trail():
     # is the exit path instead, and at 2.9 the stop fires.
     pos3 = _pos(peak_premium=4.9)        # peaked BELOW entry
     r3 = tr.check_position(pos3, share_price=100.0, option_premium=2.9,
-                           macd_spread_abs=1.0, now_et=AFTERNOON)
+                           macd_spread_abs=1.0, last_close=101.0, e12=100.0,
+                           now_et=AFTERNOON)
     assert r3['exit'] is not None and r3['exit']['is_stop'], \
         "below-entry collapse must exit via STOP, not trail"
     assert 'FLOOR' in r3['exit']['trigger']   # -42% is past the -15% floor
