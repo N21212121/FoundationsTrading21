@@ -116,6 +116,13 @@
   tr.pos-row:hover { background: var(--card-2); }
   tr.pos-row.selected { background: var(--card-2);
                         border-left: 3px solid var(--scarlet); }
+
+  /* ── P/L pill ── */
+  .pl-pill { display: inline-block; min-width: 64px; text-align: center;
+             padding: 2px 8px; border-radius: 10px; font-size: 12.5px;
+             border: 1px solid var(--border); background: #fff; }
+  .pl-pill.up { background: var(--green); color: #fff; border-color: var(--green); }
+  .pl-pill.down { background: var(--red); color: #fff; border-color: var(--red); }
 </style>
 </head>
 <body>
@@ -177,7 +184,6 @@
       <button onclick="addWatch()">Add</button>
       <button onclick="removeWatch()">Remove</button>
     </div>
-    <div id="watchList" style="font-size:12.5px;color:var(--text-dim)"></div>
     <div id="tradeMsg"></div>
   </div>
 
@@ -186,7 +192,7 @@
     <table>
       <thead><tr>
         <th>Ticker</th><th>Dir</th><th>Shares</th><th>Contracts</th>
-        <th>Opened</th>
+        <th>Value $</th><th>Port %</th><th>P/L</th>
       </tr></thead>
       <tbody id="posBody"></tbody>
     </table>
@@ -197,7 +203,6 @@
 const $ = id => document.getElementById(id);
 let selected = null;
 let engineOn = false;
-let chart = null;
 
 async function api(path, opts) {
   const r = await fetch(path, opts ? {
@@ -235,21 +240,35 @@ async function toggleEngine() {
   refreshHealth();
 }
 
-/* ── positions ── */
+/* ── positions table (watchlist + holdings merged) ── */
 async function refreshPositions() {
-  const pos = await api('/api/positions');
+  const d = await api('/api/dashboard');
   const tb = $('posBody');
   tb.innerHTML = '';
-  for (const [ticker, p] of Object.entries(pos)) {
+  for (const r of d.rows) {
     const tr = document.createElement('tr');
-    tr.className = 'pos-row' + (ticker === selected ? ' selected' : '');
-    tr.onclick = () => { selected = ticker; refreshAll(); };
-    tr.innerHTML = `<td>${ticker}</td><td>${p.direction || ''}</td>` +
-      `<td>${p.shares || 0}</td><td>${p.option_contracts || 0}</td>` +
-      `<td>${(p.opened_at || '').slice(5, 16)}</td>`;
+    tr.className = 'pos-row' + (r.ticker === selected ? ' selected' : '');
+    tr.onclick = () => { selected = r.ticker; refreshAll(); };
+    const plClass = r.pl > 0 ? 'up' : (r.pl < 0 ? 'down' : '');
+    const plText = (r.pl > 0 ? '+' : '') + r.pl.toFixed(2);
+    tr.innerHTML =
+      `<td>${r.ticker}</td><td>${r.direction}</td>` +
+      `<td>${r.shares}</td><td>${r.contracts}</td>` +
+      `<td>$${r.value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>` +
+      `<td>${r.port_pct.toFixed(2)}%</td>` +
+      `<td><span class="pl-pill ${plClass}">${plText}</span></td>`;
     tb.appendChild(tr);
   }
-  if (selected && pos[selected]) renderDetails(selected, pos[selected]);
+  if (selected) {
+    const pos = await api('/api/positions');
+    if (pos[selected]) renderDetails(selected, pos[selected]);
+    else {
+      $('detailsBody').innerHTML = '<span style="color:var(--text-dim)">' +
+        selected + ': watched, no open position.</span>';
+      $('chartTicker').textContent = selected;
+      drawChart(selected);
+    }
+  }
 }
 
 function renderDetails(ticker, p) {
@@ -319,27 +338,21 @@ async function manualSell() {
   refreshPositions();
 }
 
-/* ── watchlist ── */
-async function refreshWatch() {
-  const w = await api('/api/watchlist');
-  $('watchList').textContent = w.length
-    ? w.map(x => `${x.ticker} (${x.allocation_pct}%)`).join('  ·  ')
-    : 'empty';
-}
+/* ── watchlist add/remove (rows appear in Positions table) ── */
 async function addWatch() {
   await api('/api/watchlist', {action: 'add',
     ticker: $('wTicker').value.trim().toUpperCase(),
     allocation_pct: parseFloat($('wAlloc').value || 5)});
-  refreshWatch();
+  refreshPositions();
 }
 async function removeWatch() {
   await api('/api/watchlist', {action: 'remove',
     ticker: $('wTicker').value.trim().toUpperCase()});
-  refreshWatch();
+  refreshPositions();
 }
 
 /* ── boot ── */
-function refreshAll() { refreshHealth(); refreshPositions(); refreshWatch(); }
+function refreshAll() { refreshHealth(); refreshPositions(); }
 refreshAll();
 setInterval(refreshHealth, 5000);
 setInterval(refreshPositions, 10000);

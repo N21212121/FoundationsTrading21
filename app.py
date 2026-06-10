@@ -466,6 +466,48 @@ def logs(kind):
 def index():
     return app.send_static_file('index.html')
 
+@app.route('/api/dashboard')
+def dashboard():
+    """Merged view: every watchlist ticker + any held position, with live
+    values. Tickers with no position show zeros."""
+    cfg = cm.load_config()
+    pos = _positions()
+    equity = None
+    broker = {}
+    if alpaca.is_connected():
+        try:
+            equity = alpaca.get_account()['equity']
+            for b in alpaca.get_positions():
+                broker[b['symbol']] = b
+        except Exception:
+            pass
+
+    rows = []
+    tickers = {w['ticker'].upper() for w in cfg.get('watchlist', [])} | set(pos.keys())
+    for t in sorted(tickers):
+        p = pos.get(t, {})
+        # share leg value from broker (symbol == ticker)
+        sh = broker.get(t, {})
+        value = float(sh.get('market_value') or 0)
+        pl = float(sh.get('unrealized_pl') or 0)
+        # option leg value from broker (symbol == OCC option symbol)
+        osym = p.get('option_symbol')
+        if osym and osym in broker:
+            value += float(broker[osym].get('market_value') or 0)
+            pl += float(broker[osym].get('unrealized_pl') or 0)
+        rows.append({
+            'ticker': t,
+            'direction': p.get('direction', ''),
+            'shares': p.get('shares', 0),
+            'contracts': p.get('option_contracts', 0),
+            'value': round(value, 2),
+            'port_pct': round(value / equity * 100, 2) if equity else 0.0,
+            'pl': round(pl, 2),
+            'opened_at': p.get('opened_at', ''),
+            'watched': t in {w['ticker'].upper() for w in cfg.get('watchlist', [])},
+        })
+    return jsonify({'equity': equity, 'rows': rows})
+
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main():
