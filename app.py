@@ -464,13 +464,7 @@ def logs(kind):
 
 @app.route('/')
 def index():
-    return ('<html><body style="background:#0a1430;color:#e8e8e8;'
-            'font-family:monospace;padding:2rem">'
-            '<h2 style="color:#b22030">Foundations Trading</h2>'
-            '<p>Backend running. Dashboard UI not yet installed.</p>'
-            '<p>Try <a style="color:#7aa" href="/api/health">/api/health</a></p>'
-            '</body></html>')
-
+    return app.send_static_file('index.html')
 
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 
