@@ -113,11 +113,50 @@ def test_share_stop():
     print("  PASS: share stop fires at -5.1%")
 
 
-def test_option_stop():
+def test_option_stop_confirmed():
+    # -8% loss, long, last close BELOW e12 -> structure broken, fires
     r = tr.check_position(_pos(), share_price=100.0, option_premium=4.6,
+                          macd_spread_abs=1.0, last_close=99.0, e12=100.0,
+                          now_et=AFTERNOON)
+    assert r['exit'] and r['exit']['is_stop'] and 'confirmed' in r['exit']['trigger']
+    print("  PASS: option stop fires at -8% with EMA12 break")
+
+
+def test_option_stop_held_by_structure():
+    # -8% premium loss but close ABOVE e12 (long): theta noise, HOLD
+    r = tr.check_position(_pos(), share_price=100.0, option_premium=4.6,
+                          macd_spread_abs=1.0, last_close=101.0, e12=100.0,
+                          now_et=AFTERNOON)
+    assert r['exit'] is None
+    print("  PASS: -8% premium drawdown held while structure intact")
+
+
+def test_option_floor_unconditional():
+    # -16%: floor fires even with structure intact
+    r = tr.check_position(_pos(), share_price=100.0, option_premium=4.2,
+                          macd_spread_abs=1.0, last_close=101.0, e12=100.0,
+                          now_et=AFTERNOON)
+    assert r['exit'] and 'FLOOR' in r['exit']['trigger']
+    print("  PASS: -16% floor fires through intact EMA12")
+
+
+def test_option_stop_short_inversion():
+    # Short position: break = close ABOVE e12
+    pos = _pos(direction='short')
+    r = tr.check_position(pos, 100.0, option_premium=4.6, macd_spread_abs=1.0,
+                          last_close=101.0, e12=100.0, now_et=AFTERNOON)
+    assert r['exit'] and r['exit']['is_stop']
+    r2 = tr.check_position(_pos(direction='short'), 100.0, 4.6, 1.0,
+                           last_close=99.0, e12=100.0, now_et=AFTERNOON)
+    assert r2['exit'] is None
+    print("  PASS: short inversion (break = close above EMA12)")
+
+
+def test_option_stop_no_bar_data_fails_safe():
+    r = tr.check_position(_pos(), 100.0, option_premium=4.6,
                           macd_spread_abs=1.0, now_et=AFTERNOON)
-    assert r['exit'] and r['exit']['sleeve'] == 'options' and r['exit']['is_stop']
-    print("  PASS: option stop fires at -8%")
+    assert r['exit'] and 'unconfirmed' in r['exit']['trigger']
+    print("  PASS: missing bar data -> stop fires blind (capital protection)")
 
 
 def test_stops_suppressed_before_10():
@@ -148,12 +187,35 @@ def test_premium_trail():
                            macd_spread_abs=1.0, now_et=AFTERNOON)
     assert r3['exit'] is not None and r3['exit']['is_stop'], \
         "below-entry collapse must exit via STOP, not trail"
-    assert 'option stop' in r3['exit']['trigger']
+    assert 'FLOOR' in r3['exit']['trigger']   # -42% is past the -15% floor
     # Same below-entry peak, morning (stops off), small dip: nothing fires
     r4 = tr.check_position(_pos(peak_premium=4.9), 100.0, 4.8, 1.0,
                            now_et=MORNING)
     assert r4['exit'] is None
     print("  PASS: premium trail armed only above entry; below-entry exits via stop")
+
+
+def test_breakeven_ratchet():
+    # Armed: peak 5.6 >= 5.5 (entry 5.0 +10%). Premium fades to 4.95 -> exit
+    r = tr.check_position(_pos(peak_premium=5.6), share_price=100.0,
+                          option_premium=4.95, macd_spread_abs=1.0,
+                          last_close=101.0, e12=100.0, now_et=AFTERNOON)
+    assert r['exit'] and 'breakeven ratchet' in r['exit']['trigger']
+    assert not r['exit']['is_stop'], "ratchet is a scratch, not a stop"
+    # NOT armed: peak 5.4 < 5.5 arm line. Premium at 4.95 (-1%) -> hold
+    r2 = tr.check_position(_pos(peak_premium=5.4), 100.0, 4.95, 1.0,
+                           last_close=101.0, e12=100.0, now_et=AFTERNOON)
+    assert r2['exit'] is None
+    # Armed but premium still above entry -> hold (trail/MACD own the upside)
+    r3 = tr.check_position(_pos(peak_premium=5.6), 100.0, 5.2, 1.0,
+                           last_close=101.0, e12=100.0, now_et=AFTERNOON)
+    assert r3['exit'] is None
+    # Active before 10:00 (profit exit, not a stop)
+    r4 = tr.check_position(_pos(peak_premium=5.6), 100.0, 4.95, 1.0,
+                           last_close=101.0, e12=100.0, now_et=MORNING)
+    assert r4['exit'] and 'breakeven ratchet' in r4['exit']['trigger']
+    print("  PASS: breakeven ratchet (arms at +10%, scratches at entry, "
+          "active pre-10:00, not a stop)")
 
 
 def test_macd_collapse():
@@ -228,9 +290,14 @@ def main():
     test_plan_entry_long_no_chain()
     test_plan_entry_short_puts_only()
     test_share_stop()
-    test_option_stop()
+    test_option_stop_confirmed()
+    test_option_stop_held_by_structure()
+    test_option_floor_unconditional()
+    test_option_stop_short_inversion()
+    test_option_stop_no_bar_data_fails_safe()
     test_stops_suppressed_before_10()
     test_premium_trail()
+    test_breakeven_ratchet()
     test_macd_collapse()
     test_peak_tracking_and_reset()
     test_no_rebuy_flags()

@@ -67,6 +67,14 @@ def _budget_for(ticker, cfg):
 
 def _do_entry(ticker, direction, cfg, source='engine'):
     """Plan and execute an entry. Returns a result dict for logging."""
+    # ONE POSITION PER TICKER (engine entries only). Any open position on
+    # this ticker blocks a new engine entry — signals re-firing on a bar
+    # while a position is open must NOT pyramid the position. Manual adds
+    # through the trade card remain allowed; the user is the gate there.
+    if source == 'engine' and ticker in _positions():
+        return {'ok': False,
+                'reason': 'position already open; engine adds blocked'}
+
     # No-rebuy guard (stops set these; profit exits don't)
     if tr.rebuy_blocked(_no_rebuy, ticker, 'options') and \
        tr.rebuy_blocked(_no_rebuy, ticker, 'shares'):
@@ -215,7 +223,9 @@ def _evaluate_ticker(ticker, cfg, pos):
     df = se.bars_to_df(bars10)
     e5 = float(se.ema(df['close'], se.EMA_FAST).iloc[-1])
     e12 = float(se.ema(df['close'], se.EMA_SLOW).iloc[-1])
-    _macd_cache[ticker] = {'spread_abs': abs(e5 - e12), 'bar_time': newest}
+    _macd_cache[ticker] = {'spread_abs': abs(e5 - e12), 'bar_time': newest,
+                           'last_close': float(df['close'].iloc[-1]),
+                           'e12': e12}
 
     open_dir = pos.get(ticker, {}).get('direction')
     d = se.evaluate(ticker, bars10, bars1h, current_open=q['mid'],
@@ -282,9 +292,12 @@ def monitor_loop():
                     if p.get('option_contracts', 0) > 0 and p.get('option_symbol'):
                         oq = alpaca.get_options_quote(p['option_symbol'])
                         premium = oq['mid'] if oq else None
-                    spread_abs = _macd_cache.get(ticker, {}).get('spread_abs')
+                    cache = _macd_cache.get(ticker, {})
 
-                    r = tr.check_position(p, share_price, premium, spread_abs)
+                    r = tr.check_position(p, share_price, premium,
+                                          cache.get('spread_abs'),
+                                          last_close=cache.get('last_close'),
+                                          e12=cache.get('e12'))
                     if r['peak_premium'] != p.get('peak_premium') or \
                        r['peak_macd_spread'] != p.get('peak_macd_spread'):
                         p['peak_premium'] = r['peak_premium']
