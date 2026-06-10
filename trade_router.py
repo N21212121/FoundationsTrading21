@@ -203,35 +203,75 @@ def _order_ok(result):
     return str(status).lower() in _OK_ORDER_STATUSES
 
 
+def confirm_fill(alpaca, order_id, timeout_s=4.0, poll_s=0.5):
+    """Poll the broker for an order's real fill. Market orders on liquid
+    names fill in well under a second; we poll briefly and return
+    {'filled_qty', 'filled_avg_price', 'status'} from the broker's record.
+
+    Times out gracefully: returns whatever the last poll said. The caller
+    treats filled_qty > 0 as confirmation and uses filled_avg_price as the
+    true entry/exit price instead of the planning-time estimate."""
+    import time as _t
+    deadline = _t.monotonic() + timeout_s
+    last = {}
+    while _t.monotonic() < deadline:
+        o = alpaca.get_order(order_id)
+        if o.get('status') == 'error':
+            return {'filled_qty': 0, 'filled_avg_price': None,
+                    'status': 'error'}
+        last = o
+        if str(o.get('status', '')).lower() == 'filled':
+            break
+        _t.sleep(poll_s)
+    return {'filled_qty': last.get('filled_qty') or 0,
+            'filled_avg_price': last.get('filled_avg_price'),
+            'status': last.get('status', 'unknown')}
+
+
 def execute_plan(alpaca, ticker, legs, reason=''):
     """Fire legs in order. Options first, shares best-effort.
 
-    Returns {'filled': [...], 'failed': [...]}. Every order attempt is
-    logged to order_log; the caller updates position state from 'filled'.
+    Returns {'filled': [...], 'failed': [...]}. Each filled entry carries
+    a 'fill' dict with the broker-confirmed quantity and average price —
+    the caller updates position state from CONFIRMED fills, not estimates.
 
-    A broker rejection (e.g. selling more shares than held) returns a non-
-    error status but a zero fill. We treat anything outside the explicit
-    OK status set as a failure so the trade log reflects reality."""
+    A broker rejection returns a non-error status but a zero fill. We
+    treat anything outside the explicit OK status set as a failure, and we
+    additionally confirm the fill via get_order before classifying a leg
+    as filled."""
     filled, failed = [], []
     for leg in legs:
         if leg['kind'] == 'option':
             r = alpaca.place_option_order(leg['symbol'], leg['side'],
                                           leg['contracts'])
-            ok = _order_ok(r)
-            cm.log_order(ticker=ticker, side=leg['side'], sleeve='OPTIONS',
-                         qty=leg['contracts'], symbol=leg['symbol'],
-                         order_id=r.get('order_id', ''),
-                         status=r.get('status', '') if ok else 'failed',
-                         reason=reason or r.get('message', ''))
+            sleeve, qty, symbol = 'OPTIONS', leg['contracts'], leg['symbol']
         else:
             r = alpaca.place_share_order(ticker, leg['side'], leg['qty'])
-            ok = _order_ok(r)
-            cm.log_order(ticker=ticker, side=leg['side'], sleeve='SHARES',
-                         qty=leg['qty'], symbol=ticker,
-                         order_id=r.get('order_id', ''),
-                         status=r.get('status', '') if ok else 'failed',
-                         reason=reason or r.get('message', ''))
-        (filled if ok else failed).append({'leg': leg, 'result': r})
+            sleeve, qty, symbol = 'SHARES', leg['qty'], ticker
+
+        ok = _order_ok(r)
+        fill = None
+        if ok and r.get('order_id'):
+            fill = confirm_fill(alpaca, r['order_id'])
+            # An accepted order that confirms zero fill within the window is
+            # suspicious but not definitively failed (slow fill). We keep it
+            # in 'filled' if the broker status is still working; the
+            # reconciler will catch any divergence.
+            if str(fill.get('status', '')).lower() in ('rejected', 'canceled',
+                                                       'expired'):
+                ok = False
+
+        cm.log_order(ticker=ticker, side=leg['side'], sleeve=sleeve,
+                     qty=qty, symbol=symbol,
+                     order_id=r.get('order_id', ''),
+                     status=(fill or {}).get('status',
+                                             r.get('status', '')) if ok
+                            else 'failed',
+                     fill_price=(fill or {}).get('filled_avg_price', ''),
+                     fill_qty=(fill or {}).get('filled_qty', ''),
+                     reason=reason or r.get('message', ''))
+        entry = {'leg': leg, 'result': r, 'fill': fill}
+        (filled if ok else failed).append(entry)
         # Policy A: an option-leg failure on a LONG entry doesn't stop the
         # share leg — the budget already spilled at planning time. A share
         # failure just logs; freed dollars recycle implicitly (cash was

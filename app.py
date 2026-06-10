@@ -135,14 +135,19 @@ def _do_entry(ticker, direction, cfg, source='engine'):
     p.setdefault('opened_at', datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'))
     for f in result['filled']:
         leg = f['leg']
+        fill = f.get('fill') or {}
         if leg['kind'] == 'option':
             p['option_symbol'] = leg['symbol']
-            p['option_contracts'] = p.get('option_contracts', 0) + leg['contracts']
-            p['option_entry_premium'] = leg['est_premium']
+            real_qty = int(fill.get('filled_qty') or 0) or leg['contracts']
+            p['option_contracts'] = p.get('option_contracts', 0) + real_qty
+            p['option_entry_premium'] = (fill.get('filled_avg_price')
+                                         or leg['est_premium'])
             p['option_type'] = leg['type']
         else:
-            p['shares'] = p.get('shares', 0) + leg['qty']
-            p['share_entry_price'] = leg['est_price']
+            real_qty = int(fill.get('filled_qty') or 0) or leg['qty']
+            p['shares'] = p.get('shares', 0) + real_qty
+            p['share_entry_price'] = (fill.get('filled_avg_price')
+                                      or leg['est_price'])
     tr.reset_peaks_on_add(p)
     pos[ticker] = p
     _save_positions(pos)
@@ -207,6 +212,164 @@ def _do_exit(ticker, sleeve, trigger, is_stop):
     finally:
         with _state_lock:
             _exiting.discard(ticker)
+
+
+# ─── RECONCILIATION (Tier 1) ───────────────────────────────────────────────────
+
+def _occ_underlying(symbol):
+    """Underlying ticker from an OCC option symbol.
+    OCC format: ROOT + YYMMDD + C/P + 8-digit strike — last 15 chars are
+    fixed-width, everything before is the root."""
+    return symbol[:-15] if len(symbol) > 15 else symbol
+
+
+def reconcile_positions(source='scheduled'):
+    """Diff broker truth against positions.json and repair the state file.
+
+    The broker is authoritative for WHAT is held (symbols, quantities,
+    entry prices). The state file is authoritative for strategy metadata
+    (direction, peaks, opened_at). Repairs:
+
+      - Broker option/share position missing from state -> ADD it
+        (entry from broker avg price; peaks reset; direction inferred
+        from option type: put=short, call=long; shares=long).
+      - State claims a sleeve the broker doesn't hold -> CLEAR it.
+      - Quantity mismatch -> broker wins.
+
+    Every repair is logged to the conn_event forensics stream and printed.
+    Returns the number of repairs made."""
+    if not alpaca.is_connected():
+        return 0
+    try:
+        broker = alpaca.get_positions()
+    except Exception as e:
+        cm.log_forensic('conn_event', event='reconcile', status='error',
+                        error=str(e))
+        return 0
+
+    # Index broker holdings: shares by ticker, options by underlying.
+    b_shares = {}
+    b_options = {}
+    for b in broker:
+        sym = b['symbol']
+        qty = abs(b.get('qty') or 0)
+        if qty <= 0:
+            continue
+        if str(b.get('asset_class', '')).lower().endswith('option') or \
+           len(sym) > 15:
+            b_options[_occ_underlying(sym)] = {
+                'symbol': sym, 'contracts': int(qty),
+                'avg_entry': b.get('avg_entry_price'),
+            }
+        else:
+            b_shares[sym] = {'qty': qty, 'avg_entry': b.get('avg_entry_price')}
+
+    repairs = 0
+    with _state_lock:
+        pos = _positions()
+
+        # Pass 1: broker holdings missing or mismatched in state.
+        for und, o in b_options.items():
+            p = pos.get(und, {})
+            if p.get('option_symbol') != o['symbol'] or \
+               int(p.get('option_contracts') or 0) != o['contracts']:
+                opt_type = 'put' if 'P' in o['symbol'][-9:] else 'call'
+                p.setdefault('ticker', und)
+                p.setdefault('direction',
+                             'short' if opt_type == 'put' else 'long')
+                p.setdefault('opened_at',
+                             datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'))
+                p['option_symbol'] = o['symbol']
+                p['option_contracts'] = o['contracts']
+                p['option_type'] = opt_type
+                if not p.get('option_entry_premium'):
+                    p['option_entry_premium'] = float(o['avg_entry'] or 0)
+                p.setdefault('peak_premium', 0.0)
+                p.setdefault('peak_macd_spread', 0.0)
+                pos[und] = p
+                repairs += 1
+                msg = (f'repaired {und}: broker holds {o["contracts"]}x '
+                       f'{o["symbol"]} @ {o["avg_entry"]}, state was '
+                       f'missing/mismatched')
+                print(f'[RECON] {msg}')
+                cm.log_forensic('conn_event', event='reconcile_repair',
+                                status='added_options', ticker=und,
+                                detail=msg, source=source)
+
+        for t, s in b_shares.items():
+            p = pos.get(t, {})
+            if float(p.get('shares') or 0) != float(s['qty']):
+                p.setdefault('ticker', t)
+                p.setdefault('direction', 'long')
+                p.setdefault('opened_at',
+                             datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S'))
+                p['shares'] = s['qty']
+                if not p.get('share_entry_price'):
+                    p['share_entry_price'] = float(s['avg_entry'] or 0)
+                p.setdefault('peak_premium', 0.0)
+                p.setdefault('peak_macd_spread', 0.0)
+                pos[t] = p
+                repairs += 1
+                msg = f'repaired {t}: broker holds {s["qty"]} shares, state disagreed'
+                print(f'[RECON] {msg}')
+                cm.log_forensic('conn_event', event='reconcile_repair',
+                                status='added_shares', ticker=t,
+                                detail=msg, source=source)
+
+        # Pass 2: state claims sleeves the broker doesn't hold.
+        for t in list(pos.keys()):
+            p = pos[t]
+            changed = False
+            if p.get('option_contracts', 0) > 0 and t not in b_options:
+                p['option_contracts'] = 0
+                p['option_symbol'] = ''
+                changed = True
+            if p.get('shares', 0) > 0 and t not in b_shares:
+                p['shares'] = 0
+                changed = True
+            if changed:
+                repairs += 1
+                msg = f'cleared {t}: state claimed holdings the broker does not have'
+                print(f'[RECON] {msg}')
+                cm.log_forensic('conn_event', event='reconcile_repair',
+                                status='cleared', ticker=t, detail=msg,
+                                source=source)
+            if not p.get('option_contracts') and not p.get('shares'):
+                # Position fully flat — drop the entry so the dashboard and
+                # monitor stop tracking a ghost.
+                pos.pop(t, None)
+
+        if repairs:
+            _save_positions(pos)
+    return repairs
+
+
+def prime_macd_cache():
+    """Fill the bar-close cache for every held ticker so carried positions
+    are never blind on the first bar after startup. Without this, the
+    EMA12-confirmed stop falls through to its fire-blind branch for up to
+    one full bar."""
+    pos = _positions()
+    primed = 0
+    for ticker in list(pos.keys()):
+        try:
+            bars10 = alpaca.get_bars(ticker, '10Min', limit=60)
+            if not bars10 or len(bars10) < 15:
+                continue
+            df = se.bars_to_df(bars10)
+            e5 = float(se.ema(df['close'], se.EMA_FAST).iloc[-1])
+            e12 = float(se.ema(df['close'], se.EMA_SLOW).iloc[-1])
+            _macd_cache[ticker] = {'spread_abs': abs(e5 - e12),
+                                   'bar_time': bars10[-1]['time'],
+                                   'last_close': float(df['close'].iloc[-1]),
+                                   'e12': e12}
+            primed += 1
+        except Exception as e:
+            cm.log_forensic('api_event', event='prime_cache', ticker=ticker,
+                            status='error', error=str(e))
+    if primed:
+        print(f'[INIT] cache primed for {primed} held ticker(s)')
+    return primed
 
 
 # ─── BAR-CLOSE LOOP ────────────────────────────────────────────────────────────
@@ -318,12 +481,16 @@ def _evaluate_ticker(ticker, cfg, pos):
 # ─── 10-SECOND MONITOR ─────────────────────────────────────────────────────────
 
 def monitor_loop():
-    print('[MON] monitor started (10s)')
+    print('[MON] monitor started (10s; reconcile every ~5 min)')
+    tick = 0
     while True:
         try:
             time.sleep(10)
             if not alpaca.is_connected():
                 continue
+            tick += 1
+            if tick % 30 == 0:          # ~every 5 minutes
+                reconcile_positions(source='scheduled')
             pos = _positions()
             if not pos:
                 continue
@@ -595,6 +762,10 @@ def main():
         r = alpaca.connect(cfg['alpaca_key'], cfg['alpaca_secret'],
                            paper=cfg.get('paper_trading', True))
         print(f"[INIT] alpaca: {r['message']}")
+        if r.get('status') == 'ok':
+            n = reconcile_positions(source='startup')
+            print(f'[INIT] reconcile: {n} repair(s)')
+            prime_macd_cache()
 
     threading.Thread(target=bar_loop, daemon=True).start()
     threading.Thread(target=monitor_loop, daemon=True).start()
