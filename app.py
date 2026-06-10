@@ -338,6 +338,12 @@ def reconcile_positions(source='scheduled'):
                 # Position fully flat — drop the entry so the dashboard and
                 # monitor stop tracking a ghost.
                 pos.pop(t, None)
+                repairs += 1
+                msg = f'dropped {t}: flat position (no sleeves held)'
+                print(f'[RECON] {msg}')
+                cm.log_forensic('conn_event', event='reconcile_repair',
+                                status='dropped_flat', ticker=t, detail=msg,
+                                source=source)
 
         if repairs:
             _save_positions(pos)
