@@ -14,6 +14,7 @@ in trade_router. Broker I/O lives in alpaca_manager. This file only wires
 them together.
 """
 
+import os
 import threading
 import time
 from datetime import datetime
@@ -36,8 +37,35 @@ app = Flask(__name__)
 alpaca = AlpacaManager()
 
 _state_lock = threading.RLock()
+_exiting = set()                 # tickers with an exit in flight; monitor skips
 _engine_enabled = False          # auto-trading switch; OFF until user enables
-_no_rebuy = {}                   # {ticker: {'shares': day, 'options': day}}
+
+# _no_rebuy persists to disk so a restart mid-session does NOT clear stop-out
+# blocks. Same-day stops MUST keep blocking same-day rebuys even if the user
+# kills and restarts the app. Format: {ticker: {sleeve: 'YYYY-MM-DD'}}.
+import json as _json
+_NO_REBUY_FILE = os.path.join(cm.DATA_DIR, 'no_rebuy_flags.json')
+
+
+def _load_no_rebuy():
+    try:
+        with open(_NO_REBUY_FILE, 'r', encoding='utf-8') as f:
+            return _json.load(f)
+    except (OSError, _json.JSONDecodeError):
+        return {}
+
+
+def _save_no_rebuy():
+    tmp = _NO_REBUY_FILE + '.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            _json.dump(_no_rebuy, f, indent=2)
+        os.replace(tmp, _NO_REBUY_FILE)
+    except OSError as e:
+        print(f'[INIT] no_rebuy save failed: {e}')
+
+
+_no_rebuy = _load_no_rebuy()    # {ticker: {'shares': day, 'options': day}}
 _macd_cache = {}                 # {ticker: {'spread_abs': float, 'bar_time': str}}
 _last_bar_seen = {}              # {ticker: iso time of last evaluated bar}
 _status_message = 'started'
@@ -67,18 +95,18 @@ def _budget_for(ticker, cfg):
 
 def _do_entry(ticker, direction, cfg, source='engine'):
     """Plan and execute an entry. Returns a result dict for logging."""
-    # ONE POSITION PER TICKER (engine entries only). Any open position on
-    # this ticker blocks a new engine entry — signals re-firing on a bar
-    # while a position is open must NOT pyramid the position. Manual adds
-    # through the trade card remain allowed; the user is the gate there.
-    if source == 'engine' and ticker in _positions():
-        return {'ok': False,
-                'reason': 'position already open; engine adds blocked'}
-
-    # No-rebuy guard (stops set these; profit exits don't)
-    if tr.rebuy_blocked(_no_rebuy, ticker, 'options') and \
-       tr.rebuy_blocked(_no_rebuy, ticker, 'shares'):
-        return {'ok': False, 'reason': 'same-day rebuy blocked (stop-out)'}
+    # No-rebuy guard (stops set these; profit exits don't).
+    # Long entries open both sleeves -> refuse if EITHER sleeve was stopped.
+    # Short entries are puts-only -> refuse only on an options block (a short
+    # never trades shares, so shares-blocked is meaningless for shorts).
+    if direction == 'short':
+        if tr.rebuy_blocked(_no_rebuy, ticker, 'options'):
+            return {'ok': False, 'reason': 'same-day rebuy blocked (option stop-out)'}
+    else:
+        if tr.rebuy_blocked(_no_rebuy, ticker, 'options'):
+            return {'ok': False, 'reason': 'same-day rebuy blocked (option stop-out)'}
+        if tr.rebuy_blocked(_no_rebuy, ticker, 'shares'):
+            return {'ok': False, 'reason': 'same-day rebuy blocked (share stop-out)'}
 
     budget = _budget_for(ticker, cfg)
     if budget <= 0:
@@ -129,40 +157,56 @@ def _do_entry(ticker, direction, cfg, source='engine'):
 
 
 def _do_exit(ticker, sleeve, trigger, is_stop):
-    """Execute an exit for one position sleeve and update state."""
-    pos = _positions()
-    p = pos.get(ticker)
-    if not p:
-        return {'ok': False, 'reason': 'no position'}
+    """Execute an exit for one position sleeve and update state.
 
-    legs = tr.plan_exit(p, sleeve=sleeve)
-    if not legs:
-        return {'ok': False, 'reason': 'nothing to sell for that sleeve'}
+    Guarded against duplicate fires: if an exit is already in flight on this
+    ticker, return immediately. The monitor loop also skips in-flight tickers,
+    but this is defense in depth."""
+    with _state_lock:
+        if ticker in _exiting:
+            return {'ok': False, 'reason': 'exit already in flight'}
+        pos = _positions()
+        p = pos.get(ticker)
+        if not p:
+            return {'ok': False, 'reason': 'no position'}
+        _exiting.add(ticker)
 
-    tr.execute_plan(alpaca, ticker, legs, reason=trigger)
+    try:
+        legs = tr.plan_exit(p, sleeve=sleeve)
+        if not legs:
+            return {'ok': False, 'reason': 'nothing to sell for that sleeve'}
 
-    if is_stop:
-        for leg in legs:
-            tr.mark_stop_out(_no_rebuy, ticker,
-                             'options' if leg['kind'] == 'option' else 'shares')
+        tr.execute_plan(alpaca, ticker, legs, reason=trigger)
 
-    # Clear sold sleeves from state
-    for leg in legs:
-        if leg['kind'] == 'option':
-            p['option_contracts'] = 0
-            p['option_symbol'] = ''
-        else:
-            p['shares'] = 0
-    if not p.get('option_contracts') and not p.get('shares'):
-        del pos[ticker]
-    else:
-        pos[ticker] = p
-    _save_positions(pos)
+        if is_stop:
+            for leg in legs:
+                tr.mark_stop_out(_no_rebuy, ticker,
+                                 'options' if leg['kind'] == 'option' else 'shares')
+            _save_no_rebuy()
 
-    cm.log_trade(ticker=ticker, side=(p.get('direction') or '').upper(),
-                 sleeve=sleeve.upper(), action='SELL', qty=len(legs),
-                 price='', status='submitted', reason=trigger)
-    return {'ok': True}
+        # Clear sold sleeves from state (under the same lock as the in-flight flag)
+        with _state_lock:
+            pos = _positions()       # re-read; another path may have touched it
+            p = pos.get(ticker, p)
+            for leg in legs:
+                if leg['kind'] == 'option':
+                    p['option_contracts'] = 0
+                    p['option_symbol'] = ''
+                else:
+                    p['shares'] = 0
+            if not p.get('option_contracts') and not p.get('shares'):
+                pos.pop(ticker, None)
+            else:
+                pos[ticker] = p
+            _save_positions(pos)
+
+        cm.log_trade(ticker=ticker, side=(p.get('direction') or '').upper(),
+                     sleeve=sleeve.upper(), action='SELL', qty=len(legs),
+                     price='', status='submitted', reason=trigger)
+        return {'ok': True}
+    finally:
+        with _state_lock:
+            _exiting.discard(ticker)
 
 
 # ─── BAR-CLOSE LOOP ────────────────────────────────────────────────────────────
@@ -223,9 +267,7 @@ def _evaluate_ticker(ticker, cfg, pos):
     df = se.bars_to_df(bars10)
     e5 = float(se.ema(df['close'], se.EMA_FAST).iloc[-1])
     e12 = float(se.ema(df['close'], se.EMA_SLOW).iloc[-1])
-    _macd_cache[ticker] = {'spread_abs': abs(e5 - e12), 'bar_time': newest,
-                           'last_close': float(df['close'].iloc[-1]),
-                           'e12': e12}
+    _macd_cache[ticker] = {'spread_abs': abs(e5 - e12), 'bar_time': newest}
 
     open_dir = pos.get(ticker, {}).get('direction')
     d = se.evaluate(ticker, bars10, bars1h, current_open=q['mid'],
@@ -285,6 +327,8 @@ def monitor_loop():
                 continue
             changed = False
             for ticker, p in list(pos.items()):
+                if ticker in _exiting:
+                    continue            # exit already firing; don't re-evaluate
                 try:
                     q = alpaca.get_quote(ticker)
                     share_price = q['mid'] if q else None
@@ -292,12 +336,9 @@ def monitor_loop():
                     if p.get('option_contracts', 0) > 0 and p.get('option_symbol'):
                         oq = alpaca.get_options_quote(p['option_symbol'])
                         premium = oq['mid'] if oq else None
-                    cache = _macd_cache.get(ticker, {})
+                    spread_abs = _macd_cache.get(ticker, {}).get('spread_abs')
 
-                    r = tr.check_position(p, share_price, premium,
-                                          cache.get('spread_abs'),
-                                          last_close=cache.get('last_close'),
-                                          e12=cache.get('e12'))
+                    r = tr.check_position(p, share_price, premium, spread_abs)
                     if r['peak_premium'] != p.get('peak_premium') or \
                        r['peak_macd_spread'] != p.get('peak_macd_spread'):
                         p['peak_premium'] = r['peak_premium']

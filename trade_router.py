@@ -15,11 +15,8 @@ Owns everything between a signal-engine decision and the broker:
     - Order intents -> alpaca_manager calls -> position state updates.
 
   MONITORING (the 10-second loop body)
-    - Share stop  -5.00% unconditional        (suppressed before 10:00 ET)
-    - Option stop -7.00% EMA12-break confirmed; -15% unconditional floor
-                                               (suppressed before 10:00 ET)
-    - Breakeven ratchet: premium ever +10% over entry -> exit at/below
-      entry, unconditional (profit exit, no rebuy block)
+    - Share stop  -5.00%        (suppressed before 10:00 ET)
+    - Option stop -7.00%        (suppressed before 10:00 ET)
     - Premium trail: sell options when premium <= 60% of peak since entry
     - MACD-collapse: sell sleeve when |EMA5-EMA12 spread| <= 70% of peak
     - First exit to fire wins. Stops set a no-same-day-rebuy flag;
@@ -48,13 +45,9 @@ CONTRACT_MULTIPLIER = 100
 
 # ─── RISK / EXIT CONSTANTS ─────────────────────────────────────────────────────
 
-SHARE_STOP_PCT = 5.0          # shares: unconditional, sell at -5.00% from entry
-OPTION_STOP_PCT = 7.0         # options: fires ONLY with EMA12 break confirmation
-OPTION_STOP_FLOOR_PCT = 15.0  # options: unconditional hard floor, no confirmation
+SHARE_STOP_PCT = 5.0         # sell shares at -5.00% from entry
+OPTION_STOP_PCT = 7.0        # sell options at -7.00% from entry premium
 PREMIUM_TRAIL_FRAC = 0.60    # sell options when premium <= 60% of peak
-BREAKEVEN_ARM_PCT = 10.0     # once premium has been +10% over entry, option
-                             # stop ratchets to breakeven (unconditional,
-                             # treated as a profit exit: no rebuy block)
 MACD_COLLAPSE_FRAC = 0.70    # sell sleeve when |spread| <= 70% of peak
 STOPS_START = dtime(10, 0)   # stop losses OFF before 10:00 ET; profit exits ON
 
@@ -187,29 +180,50 @@ def plan_exit(position, sleeve='both'):
 
 # ─── EXECUTION (Policy A) ──────────────────────────────────────────────────────
 
+# Alpaca order statuses that count as a real fill/working order. 'rejected'
+# and 'canceled' come back with a non-error status string and a zero fill,
+# so we must whitelist explicitly rather than reject only 'error'.
+_OK_ORDER_STATUSES = {'filled', 'partially_filled', 'accepted',
+                      'new', 'pending_new', 'accepted_for_bidding'}
+
+
+def _order_ok(result):
+    """True only if the broker accepted the order. A status outside the
+    OK set (e.g. 'rejected', 'canceled', 'error') is a failure even if no
+    exception fired."""
+    status = (result or {}).get('status', '')
+    if status == 'error':
+        return False
+    return str(status).lower() in _OK_ORDER_STATUSES
+
+
 def execute_plan(alpaca, ticker, legs, reason=''):
     """Fire legs in order. Options first, shares best-effort.
 
     Returns {'filled': [...], 'failed': [...]}. Every order attempt is
-    logged to order_log; the caller updates position state from 'filled'."""
+    logged to order_log; the caller updates position state from 'filled'.
+
+    A broker rejection (e.g. selling more shares than held) returns a non-
+    error status but a zero fill. We treat anything outside the explicit
+    OK status set as a failure so the trade log reflects reality."""
     filled, failed = [], []
     for leg in legs:
         if leg['kind'] == 'option':
             r = alpaca.place_option_order(leg['symbol'], leg['side'],
                                           leg['contracts'])
-            ok = r.get('status') not in (None, 'error')
+            ok = _order_ok(r)
             cm.log_order(ticker=ticker, side=leg['side'], sleeve='OPTIONS',
                          qty=leg['contracts'], symbol=leg['symbol'],
                          order_id=r.get('order_id', ''),
-                         status='submitted' if ok else 'error',
+                         status=r.get('status', '') if ok else 'failed',
                          reason=reason or r.get('message', ''))
         else:
             r = alpaca.place_share_order(ticker, leg['side'], leg['qty'])
-            ok = r.get('status') not in (None, 'error')
+            ok = _order_ok(r)
             cm.log_order(ticker=ticker, side=leg['side'], sleeve='SHARES',
                          qty=leg['qty'], symbol=ticker,
                          order_id=r.get('order_id', ''),
-                         status='submitted' if ok else 'error',
+                         status=r.get('status', '') if ok else 'failed',
                          reason=reason or r.get('message', ''))
         (filled if ok else failed).append({'leg': leg, 'result': r})
         # Policy A: an option-leg failure on a LONG entry doesn't stop the
@@ -227,7 +241,7 @@ def _stops_active(now_et=None):
 
 
 def check_position(position, share_price, option_premium, macd_spread_abs,
-                   last_close=None, e12=None, now_et=None):
+                   now_et=None):
     """Evaluate every exit trigger for one position. Pure function:
     mutates NOTHING — returns updated tracking values plus any exit.
 
@@ -271,61 +285,17 @@ def check_position(position, share_price, option_premium, macd_spread_abs,
         if has_options and option_premium and position.get('option_entry_premium'):
             loss_pct = (position['option_entry_premium'] - option_premium) \
                        / position['option_entry_premium'] * 100
-
-            # Hard floor: unconditional. Caps theta bleed on a structurally
-            # intact chart — the one case the confirmation would hold forever.
-            if loss_pct >= OPTION_STOP_FLOOR_PCT:
+            if loss_pct >= OPTION_STOP_PCT:
                 out['exit'] = {'sleeve': 'options',
-                               'trigger': f'option FLOOR stop -{loss_pct:.2f}% '
-                                          f'(unconditional)',
+                               'trigger': f'option stop -{loss_pct:.2f}%',
                                'is_stop': True}
                 return out
 
-            # Confirmed stop: -7% fires only if the last closed 10-min bar
-            # broke the EMA12 in the position's direction. Premium-only
-            # drawdown (theta/IV) with intact price structure -> hold.
-            if loss_pct >= OPTION_STOP_PCT:
-                if last_close is None or e12 is None:
-                    # No bar data to confirm with. Fail toward capital
-                    # protection: fire the stop blind rather than hold blind.
-                    out['exit'] = {'sleeve': 'options',
-                                   'trigger': f'option stop -{loss_pct:.2f}% '
-                                              f'(unconfirmed: no bar data)',
-                                   'is_stop': True}
-                    return out
-                direction = position.get('direction', 'long')
-                broken = (last_close < e12) if direction == 'long' \
-                         else (last_close > e12)
-                if broken:
-                    out['exit'] = {'sleeve': 'options',
-                                   'trigger': f'option stop -{loss_pct:.2f}% '
-                                              f'(EMA12 break confirmed: close '
-                                              f'{last_close:.2f} vs e12 {e12:.2f})',
-                                   'is_stop': True}
-                    return out
-                # else: structure intact, hold through the premium noise
-
-    # ── PROFIT EXITS (always on) ──
-    # Breakeven ratchet (options): once the premium has been ARM_PCT over
-    # entry, an exit fires unconditionally at/below entry. A winner that
-    # fades exits flat instead of riding down to the -7% stop. Scratch,
-    # not a stop: same-day rebuy stays allowed.
-    entry_prem = position.get('option_entry_premium') or 0.0
-    if has_options and option_premium and entry_prem > 0:
-        armed = peak_prem >= entry_prem * (1 + BREAKEVEN_ARM_PCT / 100.0)
-        if armed and option_premium <= entry_prem:
-            out['exit'] = {'sleeve': 'options',
-                           'trigger': f'breakeven ratchet: premium '
-                                      f'{option_premium:.2f} <= entry '
-                                      f'{entry_prem:.2f} after peak '
-                                      f'{peak_prem:.2f} (armed at +'
-                                      f'{BREAKEVEN_ARM_PCT:.0f}%)',
-                           'is_stop': False}
-            return out
-
+ # ── PROFIT EXITS (always on) ──
     # Premium trail (options) — ARMED only once peak exceeds entry.
     # Until the position has actually been profitable, the -7% stop is
     # the only downside exit. Prevents the trail from firing below cost.
+    entry_prem = position.get('option_entry_premium') or 0.0
     if has_options and option_premium and peak_prem > entry_prem > 0:
         if option_premium <= PREMIUM_TRAIL_FRAC * peak_prem:
             # only meaningful if we're actually off a real peak above entry
