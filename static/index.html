@@ -5,14 +5,14 @@
 <title>Foundations Trading</title>
 <style>
   :root {
-    --bg: #f2f3f6;            /* near-white page */
+    --bg: #f2f3f6;
     --card: #ffffff;
     --card-2: #e9ecf2;
     --navy: #0a1430;
-    --navy-2: #111d40;        /* topbar keeps this */
+    --navy-2: #111d40;
     --navy-3: #1a2a55;
     --scarlet: #b22030; --scarlet-bright: #e03545;
-    --text: #18223a;          /* navy-dark text */
+    --text: #18223a;
     --text-dim: #5b6478;
     --green: #1e7e4d; --red: #c0392b; --border: #c9cfdc;
   }
@@ -23,7 +23,6 @@
     height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   }
 
-  /* ── Top bar (stays navy) ── */
   #topbar {
     display: flex; align-items: center; gap: 16px;
     padding: 10px 18px; background: var(--navy-2);
@@ -48,7 +47,6 @@
   #engineBtn.armed { background: var(--scarlet); color: #fff;
                      border-color: var(--scarlet-bright); }
 
-  /* ── Grid ── */
   #dash {
     flex: 1; display: grid; gap: 12px; padding: 12px;
     grid-template-columns: 1fr 2fr;
@@ -71,22 +69,18 @@
   #card-trade { grid-area: trade; }
   #card-positions { grid-area: positions; }
 
-  /* ── Details ── */
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px;
         font-size: 13px; }
   .kv .k { color: var(--text-dim); }
   .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
   .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet);
                    text-transform: uppercase; letter-spacing: 1px; }
-  .pl-pos { color: var(--green); } .pl-neg { color: var(--red); }
 
-  /* ── Chart ── */
   #chartCanvas { flex: 1; min-height: 0; width: 100%; }
   #chartHead { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
   #chartTicker { font-size: 16px; font-weight: 600; color: var(--navy); }
   #chartPrice { color: var(--text-dim); }
 
-  /* ── Trade card ── */
   .form-row { display: flex; gap: 8px; margin-bottom: 9px; align-items: center; }
   input, select {
     background: #fff; border: 1px solid var(--border); color: var(--text);
@@ -105,7 +99,6 @@
   #tradeMsg { font-size: 12.5px; color: var(--text-dim); min-height: 18px;
               margin-top: 6px; }
 
-  /* ── Positions table ── */
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--text-dim); font-weight: 500;
        font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
@@ -117,12 +110,46 @@
   tr.pos-row.selected { background: var(--card-2);
                         border-left: 3px solid var(--scarlet); }
 
-  /* ── P/L pill ── */
   .pl-pill { display: inline-block; min-width: 64px; text-align: center;
              padding: 2px 8px; border-radius: 10px; font-size: 12.5px;
              border: 1px solid var(--border); background: #fff; }
   .pl-pill.up { background: var(--green); color: #fff; border-color: var(--green); }
   .pl-pill.down { background: var(--red); color: #fff; border-color: var(--red); }
+
+  .mode-pill { display: inline-block; min-width: 56px; text-align: center;
+               padding: 2px 8px; border-radius: 10px; font-size: 11.5px;
+               cursor: pointer; user-select: none; font-weight: 600;
+               letter-spacing: 0.5px; border: 1px solid var(--border);
+               background: #fff; color: var(--text-dim); }
+  .mode-pill.run { background: var(--green); color: #fff;
+                   border-color: var(--green); }
+
+  /* ── Standardized modal: ALL confirmations route through this ── */
+  #modalBack {
+    display: none; position: fixed; inset: 0;
+    background: rgba(10,20,48,0.45); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  #modalBack.show { display: flex; }
+  #modalBox {
+    background: var(--card); border-radius: 10px; min-width: 380px;
+    max-width: 480px; box-shadow: 0 8px 32px rgba(10,20,48,0.3);
+    border-top: 3px solid var(--scarlet); overflow: hidden;
+  }
+  #modalTitle {
+    padding: 14px 18px 0; font-size: 15px; font-weight: 600;
+    color: var(--navy);
+  }
+  #modalMsg {
+    padding: 10px 18px 16px; font-size: 13.5px; color: var(--text);
+    line-height: 1.5;
+  }
+  #modalBtns {
+    display: flex; justify-content: flex-end; gap: 8px;
+    padding: 12px 18px; background: var(--card-2);
+  }
+  #modalConfirm { background: var(--scarlet); color: #fff;
+                  border-color: var(--scarlet-bright); }
 </style>
 </head>
 <body>
@@ -191,11 +218,23 @@
     <h2>Portfolio Positions</h2>
     <table>
       <thead><tr>
-        <th>Ticker</th><th>Dir</th><th>Shares</th><th>Contracts</th>
-        <th>Value $</th><th>Port %</th><th>P/L</th>
+        <th>Ticker</th><th>Mode</th><th>Dir</th><th>Shares</th>
+        <th>Contracts</th><th>Value $</th><th>Port %</th><th>P/L</th>
       </tr></thead>
       <tbody id="posBody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── Standardized modal ── -->
+<div id="modalBack">
+  <div id="modalBox">
+    <div id="modalTitle"></div>
+    <div id="modalMsg"></div>
+    <div id="modalBtns">
+      <button onclick="modalResolve(false)">Cancel</button>
+      <button id="modalConfirm" onclick="modalResolve(true)">Confirm</button>
+    </div>
   </div>
 </div>
 
@@ -203,6 +242,7 @@
 const $ = id => document.getElementById(id);
 let selected = null;
 let engineOn = false;
+let lastRows = [];
 
 async function api(path, opts) {
   const r = await fetch(path, opts ? {
@@ -210,6 +250,22 @@ async function api(path, opts) {
     body: JSON.stringify(opts)
   } : undefined);
   return r.json();
+}
+
+/* ── Standardized confirmation. EVERY warning in the app uses this. ── */
+let _modalCb = null;
+function appConfirm(title, message, confirmLabel = 'Confirm') {
+  return new Promise(resolve => {
+    $('modalTitle').textContent = title;
+    $('modalMsg').innerHTML = message;
+    $('modalConfirm').textContent = confirmLabel;
+    $('modalBack').classList.add('show');
+    _modalCb = resolve;
+  });
+}
+function modalResolve(v) {
+  $('modalBack').classList.remove('show');
+  if (_modalCb) { _modalCb(v); _modalCb = null; }
 }
 
 /* ── health / status strip ── */
@@ -233,16 +289,21 @@ async function refreshHealth() {
 
 async function toggleEngine() {
   const want = !engineOn;
-  if (want && !confirm(
-    'ARM the engine? It will place real (paper) orders on signals.'))
-    return;
+  if (want) {
+    const ok = await appConfirm('Arm the engine?',
+      'The engine will begin placing real (paper) orders on signals for ' +
+      'every ticker set to <b>RUN</b>. Tickers on PAUSE are evaluated and ' +
+      'logged but will not enter.', 'ARM ENGINE');
+    if (!ok) return;
+  }
   await api('/api/engine', {enabled: want});
   refreshHealth();
 }
 
-/* ── positions table (watchlist + holdings merged) ── */
+/* ── positions table ── */
 async function refreshPositions() {
   const d = await api('/api/dashboard');
+  lastRows = d.rows;
   const tb = $('posBody');
   tb.innerHTML = '';
   for (const r of d.rows) {
@@ -251,8 +312,15 @@ async function refreshPositions() {
     tr.onclick = () => { selected = r.ticker; refreshAll(); };
     const plClass = r.pl > 0 ? 'up' : (r.pl < 0 ? 'down' : '');
     const plText = (r.pl > 0 ? '+' : '') + r.pl.toFixed(2);
+    let modeCell = '';
+    if (r.mode !== null && r.mode !== undefined) {
+      const cls = r.mode === 'run' ? 'mode-pill run' : 'mode-pill';
+      const label = r.mode === 'run' ? 'RUN' : 'PAUSE';
+      modeCell = `<span class="${cls}" ` +
+        `onclick="event.stopPropagation();toggleMode('${r.ticker}')">${label}</span>`;
+    }
     tr.innerHTML =
-      `<td>${r.ticker}</td><td>${r.direction}</td>` +
+      `<td>${r.ticker}</td><td>${modeCell}</td><td>${r.direction}</td>` +
       `<td>${r.shares}</td><td>${r.contracts}</td>` +
       `<td>$${r.value.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>` +
       `<td>${r.port_pct.toFixed(2)}%</td>` +
@@ -269,6 +337,31 @@ async function refreshPositions() {
       drawChart(selected);
     }
   }
+}
+
+async function toggleMode(ticker) {
+  const row = lastRows.find(r => r.ticker === ticker);
+  if (!row) return;
+  const goingTo = row.mode === 'run' ? 'PAUSE' : 'RUN';
+  const hasPosition = (row.shares > 0 || row.contracts > 0);
+
+  let msg;
+  if (goingTo === 'PAUSE' && hasPosition) {
+    msg = `<b>${ticker}</b> has an open position.<br><br>` +
+      `Pausing blocks <b>new automated entries only</b>. The open position ` +
+      `keeps full exit protection: stop losses, profit trails, and ` +
+      `signal-flip exits all stay active.`;
+  } else if (goingTo === 'PAUSE') {
+    msg = `<b>${ticker}</b> will stop taking new automated entries. ` +
+      `It will still be evaluated and logged every bar.`;
+  } else {
+    msg = `<b>${ticker}</b> will take automated entries when the engine ` +
+      `is armed and a signal confirms.`;
+  }
+  const ok = await appConfirm(`Set ${ticker} to ${goingTo}?`, msg, goingTo);
+  if (!ok) return;
+  await api('/api/watchlist', {action: 'toggle_mode', ticker});
+  refreshPositions();
 }
 
 function renderDetails(ticker, p) {
@@ -297,7 +390,7 @@ function renderDetails(ticker, p) {
   drawChart(ticker);
 }
 
-/* ── chart: placeholder grid until the candle pass ── */
+/* ── chart placeholder ── */
 async function drawChart(ticker) {
   const cv = $('chartCanvas');
   const ctx = cv.getContext('2d');
@@ -332,13 +425,16 @@ async function manualBuy() {
 
 async function manualSell() {
   if (!selected) { $('tradeMsg').textContent = 'select a position first'; return; }
+  const ok = await appConfirm(`Sell ${selected}?`,
+    `Close <b>both sleeves</b> of ${selected} at market.`, 'SELL');
+  if (!ok) return;
   const r = await api('/api/manual/sell', {ticker: selected, sleeve: 'both'});
   $('tradeMsg').textContent = r.ok ? 'sell submitted' : `rejected: ${r.reason}`;
   selected = null;
   refreshPositions();
 }
 
-/* ── watchlist add/remove (rows appear in Positions table) ── */
+/* ── watchlist ── */
 async function addWatch() {
   await api('/api/watchlist', {action: 'add',
     ticker: $('wTicker').value.trim().toUpperCase(),

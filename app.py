@@ -242,8 +242,19 @@ def _evaluate_ticker(ticker, cfg, pos):
         return
 
     a = d['action']
+    # Exits are never gated by per-ticker pause (design A: pause blocks
+    # entries only; open positions keep full exit protection).
     if a.startswith('EXIT_LONG') or a.startswith('EXIT_SHORT'):
         _do_exit(ticker, 'both', f'signal flip ({a})', is_stop=False)
+
+    mode = 'pause'
+    for w in cfg.get('watchlist', []):
+        if w['ticker'].upper() == ticker:
+            mode = w.get('mode', 'pause')
+            break
+    if mode != 'run':
+        return   # paused: evaluated and logged above, but no new entries
+
     if a.endswith('ENTER_LONG'):
         _do_entry(ticker, 'long', cfg)
     elif a.endswith('ENTER_SHORT'):
@@ -350,6 +361,7 @@ def watchlist():
                 cfg['watchlist'].append({
                     'ticker': ticker,
                     'allocation_pct': float(body.get('allocation_pct', 5.0)),
+                    'mode': 'pause',          # new tickers come in passive
                 })
         elif action == 'remove' and ticker:
             cfg['watchlist'] = [w for w in cfg['watchlist']
@@ -359,6 +371,11 @@ def watchlist():
                 if w['ticker'] == ticker:
                     w['allocation_pct'] = float(body.get('allocation_pct',
                                                          w['allocation_pct']))
+        elif action == 'toggle_mode' and ticker:
+            for w in cfg['watchlist']:
+                if w['ticker'] == ticker:
+                    w['mode'] = 'pause' if w.get('mode', 'pause') == 'run' \
+                                else 'run'
         cm.save_config(cfg)
     return jsonify(cfg.get('watchlist', []))
 
@@ -497,6 +514,9 @@ def dashboard():
             pl += float(broker[osym].get('unrealized_pl') or 0)
         rows.append({
             'ticker': t,
+            'mode': next((w.get('mode', 'pause')
+                          for w in cfg.get('watchlist', [])
+                          if w['ticker'].upper() == t), None),
             'direction': p.get('direction', ''),
             'shares': p.get('shares', 0),
             'contracts': p.get('option_contracts', 0),
