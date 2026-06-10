@@ -5,19 +5,25 @@
 <title>Foundations Trading</title>
 <style>
   :root {
-    --navy: #0a1430; --navy-2: #111d40; --navy-3: #1a2a55;
+    --bg: #f2f3f6;            /* near-white page */
+    --card: #ffffff;
+    --card-2: #e9ecf2;
+    --navy: #0a1430;
+    --navy-2: #111d40;        /* topbar keeps this */
+    --navy-3: #1a2a55;
     --scarlet: #b22030; --scarlet-bright: #e03545;
-    --text: #e8ecf4; --text-dim: #8a93a8;
-    --green: #2fae6e; --red: #d9534f; --border: #243458;
+    --text: #18223a;          /* navy-dark text */
+    --text-dim: #5b6478;
+    --green: #1e7e4d; --red: #c0392b; --border: #c9cfdc;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    background: var(--navy); color: var(--text);
+    background: var(--bg); color: var(--text);
     font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px;
     height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   }
 
-  /* ── Top bar ── */
+  /* ── Top bar (stays navy) ── */
   #topbar {
     display: flex; align-items: center; gap: 16px;
     padding: 10px 18px; background: var(--navy-2);
@@ -26,17 +32,17 @@
   #topbar h1 { font-size: 17px; color: var(--scarlet-bright); letter-spacing: 1px; }
   .tab {
     padding: 6px 14px; cursor: pointer; border-radius: 4px;
-    color: var(--text-dim); user-select: none;
+    color: #8a93a8; user-select: none;
   }
-  .tab.active { background: var(--navy-3); color: var(--text); }
+  .tab.active { background: var(--navy-3); color: #e8ecf4; }
   #status { margin-left: auto; display: flex; gap: 14px; align-items: center;
-            font-size: 12.5px; color: var(--text-dim); }
+            font-size: 12.5px; color: #8a93a8; }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
          margin-right: 5px; background: var(--red); }
-  .dot.on { background: var(--green); }
+  .dot.on { background: #2fae6e; }
   #engineBtn {
-    padding: 5px 12px; border-radius: 4px; border: 1px solid var(--border);
-    background: var(--navy-3); color: var(--text-dim); cursor: pointer;
+    padding: 5px 12px; border-radius: 4px; border: 1px solid #243458;
+    background: var(--navy-3); color: #c8cfdd; cursor: pointer;
     font-size: 12.5px;
   }
   #engineBtn.armed { background: var(--scarlet); color: #fff;
@@ -51,8 +57,9 @@
     min-height: 0;
   }
   .card {
-    background: var(--navy-2); border: 1px solid var(--border);
+    background: var(--card); border: 1px solid var(--border);
     border-radius: 8px; padding: 14px; overflow: auto; min-height: 0;
+    box-shadow: 0 1px 3px rgba(10,20,48,0.08);
   }
   .card h2 {
     font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
@@ -69,31 +76,32 @@
         font-size: 13px; }
   .kv .k { color: var(--text-dim); }
   .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
-  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet-bright);
+  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet);
                    text-transform: uppercase; letter-spacing: 1px; }
   .pl-pos { color: var(--green); } .pl-neg { color: var(--red); }
 
   /* ── Chart ── */
   #chartCanvas { flex: 1; min-height: 0; width: 100%; }
   #chartHead { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
-  #chartTicker { font-size: 16px; font-weight: 600; }
+  #chartTicker { font-size: 16px; font-weight: 600; color: var(--navy); }
   #chartPrice { color: var(--text-dim); }
 
   /* ── Trade card ── */
   .form-row { display: flex; gap: 8px; margin-bottom: 9px; align-items: center; }
   input, select {
-    background: var(--navy); border: 1px solid var(--border); color: var(--text);
+    background: #fff; border: 1px solid var(--border); color: var(--text);
     border-radius: 4px; padding: 6px 9px; font-size: 13px;
   }
   input[type=text] { width: 90px; text-transform: uppercase; }
   input[type=number] { width: 80px; }
   button {
-    background: var(--navy-3); border: 1px solid var(--border); color: var(--text);
+    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
     border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 13px;
   }
   button:hover { border-color: var(--scarlet); }
-  button.buy { background: var(--scarlet); border-color: var(--scarlet-bright); }
-  button.sell { background: var(--navy); }
+  button.buy { background: var(--scarlet); border-color: var(--scarlet-bright);
+               color: #fff; }
+  button.sell { background: #fff; }
   #tradeMsg { font-size: 12.5px; color: var(--text-dim); min-height: 18px;
               margin-top: 6px; }
 
@@ -102,11 +110,11 @@
   th { text-align: left; color: var(--text-dim); font-weight: 500;
        font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
        padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 6px 8px; border-bottom: 1px solid rgba(36,52,88,0.5);
+  td { padding: 6px 8px; border-bottom: 1px solid #e3e7ef;
        font-variant-numeric: tabular-nums; }
   tr.pos-row { cursor: pointer; }
-  tr.pos-row:hover { background: var(--navy-3); }
-  tr.pos-row.selected { background: var(--navy-3);
+  tr.pos-row:hover { background: var(--card-2); }
+  tr.pos-row.selected { background: var(--card-2);
                         border-left: 3px solid var(--scarlet); }
 </style>
 </head>
@@ -270,22 +278,20 @@ function renderDetails(ticker, p) {
   drawChart(ticker);
 }
 
-/* ── chart: lightweight candle render on canvas, no library yet ── */
+/* ── chart: placeholder grid until the candle pass ── */
 async function drawChart(ticker) {
-  // Bars come via a tiny passthrough we'll add when the chart gets real.
-  // For this pass: placeholder grid so layout is reviewable.
   const cv = $('chartCanvas');
   const ctx = cv.getContext('2d');
   cv.width = cv.clientWidth; cv.height = cv.clientHeight;
-  ctx.fillStyle = '#111d40'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.strokeStyle = '#243458';
+  ctx.fillStyle = '#f7f8fb'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#dde2ec';
   for (let x = 0; x < cv.width; x += 60) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
   }
   for (let y = 0; y < cv.height; y += 40) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cv.width, y); ctx.stroke();
   }
-  ctx.fillStyle = '#8a93a8'; ctx.font = '13px Segoe UI';
+  ctx.fillStyle = '#5b6478'; ctx.font = '13px Segoe UI';
   ctx.fillText('chart: next build pass (candles + EMA clouds)', 16, 26);
 }
 
