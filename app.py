@@ -30,6 +30,33 @@ from alpaca_manager import AlpacaManager
 ET = ZoneInfo('America/New_York')
 PORT = 5275
 
+# ── SIGNAL INVERSION ──
+# When True, the engine trades the exact MIRROR of its decisions: every LONG
+# becomes SHORT and every SHORT becomes LONG, on entries AND exits. Execution
+# is unchanged — "short" still means BUY-to-open puts, "long" still means BUY
+# calls + shares — so nothing is ever naked-sold. The engine reasons in a
+# fully mirrored world: we invert the held direction on the way in and invert
+# the action on the way out, so its flip/close logic stays internally consistent.
+INVERT_SIGNALS = False
+
+
+def _invert_dir(d):
+    if d == 'long':
+        return 'short'
+    if d == 'short':
+        return 'long'
+    return d
+
+
+def _invert_action(a):
+    if not a:
+        return a
+    if 'LONG' in a:
+        return a.replace('LONG', 'SHORT')
+    if 'SHORT' in a:
+        return a.replace('SHORT', 'LONG')
+    return a
+
 app = Flask(__name__)
 
 # ─── SHARED STATE ──────────────────────────────────────────────────────────────
@@ -66,7 +93,6 @@ def _save_no_rebuy():
 
 
 _no_rebuy = _load_no_rebuy()    # {ticker: {'shares': day, 'options': day}}
-_macd_cache = {}                 # {ticker: {'spread_abs': float, 'bar_time': str}}
 _last_bar_seen = {}              # {ticker: iso time of last evaluated bar}
 _status_message = 'started'
 
@@ -184,7 +210,6 @@ def _do_entry(ticker, direction, cfg, source='engine'):
             p['shares'] = p.get('shares', 0) + real_qty
             p['share_entry_price'] = (fill.get('filled_avg_price')
                                       or leg['est_price'])
-    tr.reset_peaks_on_add(p)
     pos[ticker] = p
     _save_positions(pos)
 
@@ -403,8 +428,6 @@ def reconcile_positions(source='scheduled'):
                 p['option_type'] = opt_type
                 if not p.get('option_entry_premium'):
                     p['option_entry_premium'] = float(o['avg_entry'] or 0)
-                p.setdefault('peak_premium', 0.0)
-                p.setdefault('peak_macd_spread', 0.0)
                 pos[und] = p
                 repairs += 1
                 msg = (f'repaired {und}: broker holds {o["contracts"]}x '
@@ -425,8 +448,6 @@ def reconcile_positions(source='scheduled'):
                 p['shares'] = s['qty']
                 if not p.get('share_entry_price'):
                     p['share_entry_price'] = float(s['avg_entry'] or 0)
-                p.setdefault('peak_premium', 0.0)
-                p.setdefault('peak_macd_spread', 0.0)
                 pos[t] = p
                 repairs += 1
                 msg = f'repaired {t}: broker holds {s["qty"]} shares, state disagreed'
@@ -461,34 +482,6 @@ def reconcile_positions(source='scheduled'):
         if repairs:
             _save_positions(pos)
     return repairs
-
-
-def prime_macd_cache():
-    """Fill the bar-close cache for every held ticker so carried positions
-    are never blind on the first bar after startup. Without this, the
-    EMA12-confirmed stop falls through to its fire-blind branch for up to
-    one full bar."""
-    pos = _positions()
-    primed = 0
-    for ticker in list(pos.keys()):
-        try:
-            bars10 = alpaca.get_bars(ticker, '10Min', limit=60)
-            if not bars10 or len(bars10) < 15:
-                continue
-            df = se.bars_to_df(bars10)
-            e5 = float(se.ema(df['close'], se.EMA_FAST).iloc[-1])
-            e12 = float(se.ema(df['close'], se.EMA_SLOW).iloc[-1])
-            _macd_cache[ticker] = {'spread_abs': abs(e5 - e12),
-                                   'bar_time': bars10[-1]['time'],
-                                   'last_close': float(df['close'].iloc[-1]),
-                                   'e12': e12}
-            primed += 1
-        except Exception as e:
-            cm.log_forensic('api_event', event='prime_cache', ticker=ticker,
-                            status='error', error=str(e))
-    if primed:
-        print(f'[INIT] cache primed for {primed} held ticker(s)')
-    return primed
 
 
 # ─── BAR-CLOSE LOOP ────────────────────────────────────────────────────────────
@@ -545,17 +538,13 @@ def _evaluate_ticker(ticker, cfg, pos):
     if not q:
         return
 
-    # Cache MACD spread for the monitor
-    df = se.bars_to_df(bars10)
-    e5 = float(se.ema(df['close'], se.EMA_FAST).iloc[-1])
-    e12 = float(se.ema(df['close'], se.EMA_SLOW).iloc[-1])
-    _macd_cache[ticker] = {'spread_abs': abs(e5 - e12), 'bar_time': newest,
-                           'last_close': float(df['close'].iloc[-1]),
-                           'e12': e12}
 
     open_dir = pos.get(ticker, {}).get('direction')
+    # Mirror the engine's worldview: present the inverted held direction so its
+    # internal flip/close reasoning matches our inverted execution.
+    eval_dir = _invert_dir(open_dir) if INVERT_SIGNALS else open_dir
     d = se.evaluate(ticker, bars10, bars1h, current_open=q['mid'],
-                    open_position_direction=open_dir)
+                    open_position_direction=eval_dir)
 
     # Log every decision
     s2 = d.get('step2') or {}
@@ -570,18 +559,24 @@ def _evaluate_ticker(ticker, cfg, pos):
         step3_macro_state=(d.get('step3') or {}).get('state', ''),
         step3_result='confirmed' if (d.get('step3') or {}).get('confirmed')
                      else ('rejected' if d.get('step3') else ''),
-        final_action=d['action'],
-        notes='engine_enabled' if _engine_enabled else 'OBSERVE ONLY',
+        final_action=(_invert_action(d['action']) if INVERT_SIGNALS
+                      else d['action']),
+        notes=(('INVERTED; ' if INVERT_SIGNALS else '')
+               + ('engine_enabled' if _engine_enabled else 'OBSERVE ONLY')),
     )
 
     if not _engine_enabled or d['action'] == 'NONE':
         return
 
-    a = d['action']
+    a = _invert_action(d['action']) if INVERT_SIGNALS else d['action']
     # Exits are never gated by per-ticker pause (design A: pause blocks
     # entries only; open positions keep full exit protection).
     if a.startswith('EXIT_LONG') or a.startswith('EXIT_SHORT'):
-        _do_exit(ticker, 'both', f'signal flip ({a})', is_stop=False)
+        ekind = d.get('exit_kind') or 'ride_end'
+        is_stop = (ekind == 'structural')
+        reason = ('34/50 structural stop (close through cloud)' if is_stop
+                  else '5/12 close (ride over)')
+        _do_exit(ticker, 'both', reason, is_stop=is_stop)
 
     mode = 'pause'
     for w in cfg.get('watchlist', []):
@@ -600,7 +595,7 @@ def _evaluate_ticker(ticker, cfg, pos):
 # ─── 10-SECOND MONITOR ─────────────────────────────────────────────────────────
 
 def monitor_loop():
-    print('[MON] monitor started (10s; reconcile every ~5 min)')
+    print('[MON] monitor started (reconcile every ~5 min; exits are engine-driven on bar close)')
     tick = 0
     while True:
         try:
@@ -610,41 +605,10 @@ def monitor_loop():
             tick += 1
             if tick % 30 == 0:          # ~every 5 minutes
                 reconcile_positions(source='scheduled')
-            pos = _positions()
-            if not pos:
-                continue
-            changed = False
-            for ticker, p in list(pos.items()):
-                if ticker in _exiting:
-                    continue            # exit already firing; don't re-evaluate
-                try:
-                    q = alpaca.get_quote(ticker)
-                    share_price = q['mid'] if q else None
-                    premium = None
-                    if p.get('option_contracts', 0) > 0 and p.get('option_symbol'):
-                        oq = alpaca.get_options_quote(p['option_symbol'])
-                        premium = oq['mid'] if oq else None
-                    cache = _macd_cache.get(ticker, {})
-
-                    r = tr.check_position(p, share_price, premium,
-                                          cache.get('spread_abs'),
-                                          last_close=cache.get('last_close'),
-                                          e12=cache.get('e12'))
-                    if r['peak_premium'] != p.get('peak_premium') or \
-                       r['peak_macd_spread'] != p.get('peak_macd_spread'):
-                        p['peak_premium'] = r['peak_premium']
-                        p['peak_macd_spread'] = r['peak_macd_spread']
-                        changed = True
-
-                    if r['exit'] and _engine_enabled:
-                        ex = r['exit']
-                        _do_exit(ticker, ex['sleeve'], ex['trigger'],
-                                 ex['is_stop'])
-                except Exception as e:
-                    cm.log_forensic('api_event', event='monitor', ticker=ticker,
-                                    status='error', error=str(e))
-            if changed:
-                _save_positions(pos)
+            # PURE-STRUCTURAL EXITS: the engine's 5/12-close and 34/50-close
+            # are the ONLY exits, fired from bar_loop on each 10-min bar close
+            # via evaluate(). The monitor no longer watches premiums or sets
+            # stops — its sole job here is periodic broker reconciliation.
         except Exception as e:
             print(f'[MON] loop error: {e}')
             time.sleep(10)
@@ -806,7 +770,6 @@ def manual_buy():
         else:
             p['shares'] = p.get('shares', 0) + leg['qty']
             p['share_entry_price'] = leg['est_price']
-    tr.reset_peaks_on_add(p)
     pos[ticker] = p
     _save_positions(pos)
     return jsonify({'ok': True, 'filled': len(result['filled']),
@@ -1010,7 +973,6 @@ def main():
         if r.get('status') == 'ok':
             n = reconcile_positions(source='startup')
             print(f'[INIT] reconcile: {n} repair(s)')
-            prime_macd_cache()
 
     threading.Thread(target=bar_loop, daemon=True).start()
     threading.Thread(target=monitor_loop, daemon=True).start()
