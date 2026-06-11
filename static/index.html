@@ -337,13 +337,19 @@ async function refreshPositions() {
   const tb = $('posBody');
   tb.innerHTML = '';
   for (const r of d.rows) {
+   try {
     const tr = document.createElement('tr');
     tr.className = 'pos-row' + (r.ticker === selected ? ' selected' : '');
     tr.onclick = () => { selected = r.ticker; refreshAll(); };
-    const plClass = r.pl > 0 ? 'up' : (r.pl < 0 ? 'down' : '');
-    const plText = (r.pl > 0 ? '+' : '') + r.pl.toFixed(2);
-    const plPctClass = r.pl_pct > 0 ? 'up' : (r.pl_pct < 0 ? 'down' : '');
-    const plPctText = (r.pl_pct > 0 ? '+' : '') + r.pl_pct.toFixed(2) + '%';
+    // Defensive coercion: a missing/None numeric field degrades to 0 rather
+    // than throwing on .toFixed/.toLocaleString and blanking the whole table.
+    const num = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+    const pl = num(r.pl), plPct = num(r.pl_pct);
+    const setD = num(r.set_dollars), curD = num(r.value);
+    const plClass = pl > 0 ? 'up' : (pl < 0 ? 'down' : '');
+    const plText = (pl > 0 ? '+' : '') + pl.toFixed(2);
+    const plPctClass = plPct > 0 ? 'up' : (plPct < 0 ? 'down' : '');
+    const plPctText = (plPct > 0 ? '+' : '') + plPct.toFixed(2) + '%';
     let modeCell = '';
     if (r.mode !== null && r.mode !== undefined) {
       const cls = r.mode === 'run' ? 'mode-pill run' : 'mode-pill';
@@ -356,13 +362,14 @@ async function refreshPositions() {
     tr.innerHTML =
       `<td>${r.ticker}</td><td>${modeCell}</td><td>${r.direction}</td>` +
       `<td>${r.shares}</td><td>${r.contracts}</td>` +
-      `<td>$${fmt(r.set_dollars)}</td>` +
-      `<td>$${fmt(r.value)}</td>` +
+      `<td>$${fmt(setD)}</td>` +
+      `<td>$${fmt(curD)}</td>` +
       `<td><span class="pl-pill ${plClass}">${plText}</span></td>` +
       `<td><span class="pl-pill ${plPctClass}">${plPctText}</span></td>` +
       `<td><span class="remove-btn" title="remove from list" ` +
         `onclick="event.stopPropagation();removeTicker('${r.ticker}')">✕</span></td>`;
     tb.appendChild(tr);
+   } catch (e) { console.error('row render failed for', r && r.ticker, e); }
   }
   if (selected) {
     const pos = await api('/api/positions');

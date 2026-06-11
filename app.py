@@ -338,12 +338,6 @@ def reconcile_positions(source='scheduled'):
                 # Position fully flat — drop the entry so the dashboard and
                 # monitor stop tracking a ghost.
                 pos.pop(t, None)
-                repairs += 1
-                msg = f'dropped {t}: flat position (no sleeves held)'
-                print(f'[RECON] {msg}')
-                cm.log_forensic('conn_event', event='reconcile_repair',
-                                status='dropped_flat', ticker=t, detail=msg,
-                                source=source)
 
         if repairs:
             _save_positions(pos)
@@ -731,19 +725,38 @@ def dashboard():
         except Exception:
             pass
 
+    # allocation_pct per ticker, for Set $ (= allocation_pct x equity).
+    alloc_by_ticker = {w['ticker'].upper(): float(w.get('allocation_pct', 0))
+                       for w in cfg.get('watchlist', [])}
+    watched = set(alloc_by_ticker.keys())
+
     rows = []
-    tickers = {w['ticker'].upper() for w in cfg.get('watchlist', [])} | set(pos.keys())
+    tickers = watched | set(pos.keys())
     for t in sorted(tickers):
         p = pos.get(t, {})
-        # share leg value from broker (symbol == ticker)
+        # share leg (broker symbol == ticker)
         sh = broker.get(t, {})
         value = float(sh.get('market_value') or 0)
         pl = float(sh.get('unrealized_pl') or 0)
-        # option leg value from broker (symbol == OCC option symbol)
+        cost = float(sh.get('cost_basis') or 0)
+        # option leg (broker symbol == OCC option symbol)
         osym = p.get('option_symbol')
         if osym and osym in broker:
-            value += float(broker[osym].get('market_value') or 0)
-            pl += float(broker[osym].get('unrealized_pl') or 0)
+            bo = broker[osym]
+            value += float(bo.get('market_value') or 0)
+            pl += float(bo.get('unrealized_pl') or 0)
+            cost += float(bo.get('cost_basis') or 0)
+
+        # Set $: the engine's per-entry budget for this ticker, stable and
+        # independent of current deployment = allocation_pct x equity.
+        set_dollars = (alloc_by_ticker.get(t, 0) / 100.0 * equity) \
+            if equity else 0.0
+
+        # P/L %: return on the whole position's cost basis (shares + options
+        # combined). Updates correctly as sleeves close because both value
+        # and cost come live from the broker's remaining legs.
+        pl_pct = (pl / cost * 100) if cost else 0.0
+
         rows.append({
             'ticker': t,
             'mode': next((w.get('mode', 'pause')
@@ -752,11 +765,12 @@ def dashboard():
             'direction': p.get('direction', ''),
             'shares': p.get('shares', 0),
             'contracts': p.get('option_contracts', 0),
+            'set_dollars': round(set_dollars, 2),
             'value': round(value, 2),
-            'port_pct': round(value / equity * 100, 2) if equity else 0.0,
             'pl': round(pl, 2),
+            'pl_pct': round(pl_pct, 2),
             'opened_at': p.get('opened_at', ''),
-            'watched': t in {w['ticker'].upper() for w in cfg.get('watchlist', [])},
+            'watched': t in watched,
         })
     return jsonify({'equity': equity, 'rows': rows})
 
