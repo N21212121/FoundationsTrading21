@@ -160,7 +160,11 @@ class AlpacaManager:
             '15Min': TimeFrame(15, TimeFrameUnit.Minute),
             '30Min': TimeFrame(30, TimeFrameUnit.Minute),
             '1Hour': TimeFrame(1, TimeFrameUnit.Hour),
+            '2Hour': TimeFrame(2, TimeFrameUnit.Hour),
+            '4Hour': TimeFrame(4, TimeFrameUnit.Hour),
             '1Day':  TimeFrame(1, TimeFrameUnit.Day),
+            '1Week': TimeFrame(1, TimeFrameUnit.Week),
+            '1Month': TimeFrame(1, TimeFrameUnit.Month),
         }
         if tf_str not in m:
             raise ValueError(f'Unsupported timeframe: {tf_str}')
@@ -174,7 +178,9 @@ class AlpacaManager:
 
         # Lookback window generous enough to cover `limit` bars incl. weekends.
         minutes_per_bar = {'1Min': 1, '5Min': 5, '10Min': 10, '15Min': 15,
-                           '30Min': 30, '1Hour': 60, '1Day': 1440}[timeframe]
+                           '30Min': 30, '1Hour': 60, '2Hour': 120,
+                           '4Hour': 240, '1Day': 1440, '1Week': 10080,
+                           '1Month': 43200}[timeframe]
         # Market hours ≈ 390 min/day; pad x3 for weekends/holidays.
         days_back = max(2, int(limit * minutes_per_bar / 390 * 3) + 2)
         start = datetime.now() - timedelta(days=days_back)
@@ -378,16 +384,28 @@ class AlpacaManager:
             return {'status': 'error', 'message': str(e)}
 
     def place_option_order(self, option_symbol, side, contracts):
-        """Market order for option contracts. side: 'buy'|'sell'."""
+        """Market order for option contracts. side: 'buy'|'sell'.
+
+        Position intent is ALWAYS explicit and one-directional:
+          buy  -> BUY_TO_OPEN   (establish/add a long option position)
+          sell -> SELL_TO_CLOSE (reduce an existing long; can NEVER open
+                                 a short). A sell with nothing to close is
+                                 rejected by the broker rather than opening
+                                 a naked short. This makes short options
+                                 structurally impossible for this system.
+        """
         self._require()
         from alpaca.trading.requests import MarketOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.enums import OrderSide, TimeInForce, PositionIntent
         self.limiter.wait()
         try:
+            intent = (PositionIntent.BUY_TO_OPEN if side == 'buy'
+                      else PositionIntent.SELL_TO_CLOSE)
             req = MarketOrderRequest(
                 symbol=option_symbol, qty=contracts,
                 side=OrderSide.BUY if side == 'buy' else OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
+                position_intent=intent,
             )
             o = self._trading.submit_order(req)
             log_forensic('api_event', event='place_option_order',

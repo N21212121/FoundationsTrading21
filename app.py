@@ -320,11 +320,26 @@ def reconcile_positions(source='scheduled'):
     b_options = {}
     for b in broker:
         sym = b['symbol']
-        qty = abs(b.get('qty') or 0)
+        raw_qty = b.get('qty') or 0
+        is_option = (str(b.get('asset_class', '')).lower().endswith('option')
+                     or len(sym) > 15)
+        # SAFETY: a negative option quantity is a SHORT option — outside this
+        # system's universe entirely. The engine never sells options to open,
+        # so any short option is alien (manual order, prior system, or broker
+        # anomaly). Refuse to adopt or manage it; alert loudly and leave it
+        # for the user to handle by hand.
+        if is_option and raw_qty < 0:
+            msg = (f'ALIEN SHORT OPTION at broker: {sym} qty {raw_qty}. '
+                   f'Engine will NOT manage this. Close it manually.')
+            print(f'[RECON][ALERT] {msg}')
+            cm.log_forensic('conn_event', event='alien_short_option',
+                            status='ALERT', ticker=_occ_underlying(sym),
+                            detail=msg, source=source)
+            continue
+        qty = abs(raw_qty)
         if qty <= 0:
             continue
-        if str(b.get('asset_class', '')).lower().endswith('option') or \
-           len(sym) > 15:
+        if is_option:
             b_options[_occ_underlying(sym)] = {
                 'symbol': sym, 'contracts': int(qty),
                 'avg_entry': b.get('avg_entry_price'),
@@ -676,7 +691,18 @@ def watchlist():
 
 @app.route('/api/positions')
 def positions():
-    return jsonify(_positions())
+    pos = _positions()
+    if alpaca.is_connected():
+        for t, p in pos.items():
+            sym = p.get('option_symbol')
+            if p.get('option_contracts', 0) > 0 and sym:
+                try:
+                    oq = alpaca.get_options_quote(sym)
+                    if oq and oq.get('mid') is not None:
+                        p['current_premium'] = round(float(oq['mid']), 4)
+                except Exception:
+                    pass
+    return jsonify(pos)
 
 
 @app.route('/api/manual/buy', methods=['POST'])
