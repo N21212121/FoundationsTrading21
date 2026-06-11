@@ -66,6 +66,16 @@
   }
   #card-details { grid-area: details; }
   #card-chart { grid-area: chart; display: flex; flex-direction: column; }
+  #card-chart.maxed {
+    position: fixed; top: 5vh; left: 5vw; width: 90vw; height: 90vh;
+    z-index: 200; box-shadow: 0 12px 48px rgba(10,20,48,0.35);
+    margin: 0;
+  }
+  #chartBackdrop {
+    display: none; position: fixed; inset: 0; z-index: 150;
+    background: rgba(10,20,48,0.35);
+  }
+  #chartBackdrop.show { display: block; }
   #card-trade { grid-area: trade; }
   #card-positions { grid-area: positions; }
 
@@ -76,8 +86,10 @@
   .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet);
                    text-transform: uppercase; letter-spacing: 1px; }
 
-  #chartCanvas { flex: 1; min-height: 0; width: 100%; }
-  #chartHead { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
+  #chartCanvas { flex: 1 1 auto; min-height: 180px; width: 100%;
+                 display: block; }
+  #tfRow { flex: 0 0 auto; }
+  #chartHead { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
   #chartTicker { font-size: 16px; font-weight: 600; color: var(--navy); }
   #chartPrice { color: var(--text-dim); }
 
@@ -120,6 +132,19 @@
                 border-radius: 4px; user-select: none; font-size: 14px;
                 line-height: 1; }
   .remove-btn:hover { background: var(--red); color: #fff; }
+
+  .chip { display:inline-block; font-size:11px; padding:2px 9px; margin-left:6px;
+          border:1px solid var(--border); border-radius:11px; cursor:pointer;
+          color:var(--text-dim); background:#fff; user-select:none; }
+  .chip.on { background:var(--navy-3); color:#e8ecf4; border-color:var(--navy-3); }
+
+  .tf-chip { display:inline-block; font-size:11px; padding:3px 10px; cursor:pointer;
+             border:1px solid var(--border); border-left:none; color:var(--text-dim);
+             background:#fff; user-select:none; }
+  .tf-chip:first-child { border-left:1px solid var(--border);
+                         border-radius:5px 0 0 5px; }
+  .tf-chip:last-child { border-radius:0 5px 5px 0; }
+  .tf-chip.on { background:var(--scarlet); color:#fff; border-color:var(--scarlet); }
 
   .mode-pill { display: inline-block; min-width: 56px; text-align: center;
                padding: 2px 8px; border-radius: 10px; font-size: 11.5px;
@@ -172,6 +197,7 @@
   </div>
 </div>
 
+<div id="chartBackdrop" onclick="toggleMaximize()"></div>
 <div id="dash">
   <div class="card" id="card-details">
     <h2>Position Details</h2>
@@ -181,7 +207,25 @@
 
   <div class="card" id="card-chart">
     <div id="chartHead">
-      <span id="chartTicker">—</span><span id="chartPrice"></span>
+      <span id="chartTicker">—</span><span id="chartPrice" style="font-weight:600"></span>
+      <span id="chartMax" class="chip" title="maximize" onclick="toggleMaximize()" style="margin-left:8px">⛶</span>
+      <span style="margin-left:auto;display:flex;gap:0;align-items:center">
+        <span id="t89" class="chip on" onclick="toggleChartLayer('ema89')">8/9</span>
+        <span id="t512" class="chip on" onclick="toggleChartLayer('ema512')">5/12</span>
+        <span id="t3450" class="chip" onclick="toggleChartLayer('ema3450')">34/50</span>
+        <span id="tmacro" class="chip" onclick="toggleChartLayer('macro')">1H</span>
+      </span>
+    </div>
+    <div id="tfRow" style="display:flex;gap:0;margin-bottom:6px;flex-wrap:wrap">
+    <span class="tf-chip on" data-tf="10Min" onclick="setTimeframe('10Min')">10m</span>
+    <span class="tf-chip" data-tf="15Min" onclick="setTimeframe('15Min')">15m</span>
+    <span class="tf-chip" data-tf="30Min" onclick="setTimeframe('30Min')">30m</span>
+    <span class="tf-chip" data-tf="1Hour" onclick="setTimeframe('1Hour')">1h</span>
+    <span class="tf-chip" data-tf="2Hour" onclick="setTimeframe('2Hour')">2h</span>
+    <span class="tf-chip" data-tf="4Hour" onclick="setTimeframe('4Hour')">4h</span>
+    <span class="tf-chip" data-tf="1Day" onclick="setTimeframe('1Day')">1D</span>
+    <span class="tf-chip" data-tf="1Week" onclick="setTimeframe('1Week')">1W</span>
+    <span class="tf-chip" data-tf="1Month" onclick="setTimeframe('1Month')">1M</span>
     </div>
     <canvas id="chartCanvas"></canvas>
   </div>
@@ -435,20 +479,330 @@ function renderDetails(ticker, p) {
 }
 
 /* ── chart placeholder ── */
+/* ── candle chart: canvas, pan/zoom, multi-EMA clouds, crosshair ── */
+const TF_LIST = ['10Min','15Min','30Min','1Hour','2Hour','4Hour','1Day','1Week','1Month'];
+const TF_LABEL = {'10Min':'10m','15Min':'15m','30Min':'30m','1Hour':'1h',
+                  '2Hour':'2h','4Hour':'4h','1Day':'1D','1Week':'1W','1Month':'1M'};
+const chartState = {
+  ticker: null, tf: '10Min', bars: [], ema: {}, macro: {}, periods: {},
+  viewStart: 0, viewCount: 70,
+  priceZoom: 1, priceOffset: 0, maximized: false,
+  layers: { c89:true, c512:true, c3450:false, macro:false },
+  drag: null, mouse: null, lastPrice: null,
+};
+
 async function drawChart(ticker) {
-  const cv = $('chartCanvas');
-  const ctx = cv.getContext('2d');
-  cv.width = cv.clientWidth; cv.height = cv.clientHeight;
-  ctx.fillStyle = '#f7f8fb'; ctx.fillRect(0, 0, cv.width, cv.height);
-  ctx.strokeStyle = '#dde2ec';
-  for (let x = 0; x < cv.width; x += 60) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, cv.height); ctx.stroke();
+  chartState.ticker = ticker;
+  $('chartTicker').textContent = ticker;
+  await loadChartBars();
+  startPriceTicker();
+}
+
+async function loadChartBars() {
+  const t = chartState.ticker; if (!t) return;
+  try {
+    const d = await api(`/api/bars/${t}?tf=${chartState.tf}&limit=600`);
+    if (d.error || !d.bars || !d.bars.length) { paintEmptyChart(d.error||'no bars'); return; }
+    chartState.bars = d.bars; chartState.ema = d.ema||{};
+    chartState.macro = d.macro||{}; chartState.periods = d.periods||{};
+    const n = chartState.bars.length;
+    chartState.viewCount = Math.min(70, n);
+    chartState.viewStart = Math.max(0, n - chartState.viewCount);
+    renderChart();
+  } catch(e){ paintEmptyChart('fetch failed'); }
+}
+
+function paintEmptyChart(msg){
+  const cv=$('chartCanvas'),ctx=cv.getContext('2d');
+  cv.width=cv.clientWidth;cv.height=cv.clientHeight;
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,cv.width,cv.height);
+  ctx.fillStyle='#5b6478';ctx.font='13px Segoe UI';ctx.fillText('chart: '+msg,16,26);
+}
+
+function macroAtTime(isoT){
+  const m=chartState.macro; if(!m.time||!m.time.length) return null;
+  if(isoT<m.time[0]) return null;
+  let lo=0,hi=m.time.length-1,ans=-1;
+  while(lo<=hi){const mid=(lo+hi)>>1; if(m.time[mid]<=isoT){ans=mid;lo=mid+1;}else hi=mid-1;}
+  return ans<0?null:{e34:m.e34[ans],e50:m.e50[ans]};
+}
+
+function fmtAxisTime(iso, withDate){
+  const d=new Date(iso);
+  const hh=('0'+d.getHours()).slice(-2), mm=('0'+d.getMinutes()).slice(-2);
+  const mo=d.getMonth()+1, da=d.getDate();
+  if(withDate) return mo+'/'+da+' '+hh+':'+mm;
+  return hh+':'+mm;
+}
+
+function sessionOf(iso){
+  // Classify a bar by ET wall-clock: pre (4:00-9:30), reg (9:30-16:00),
+  // post (16:00-20:00). Bars arrive with a UTC offset; convert to ET.
+  const d=new Date(iso);
+  // ET = UTC-5 (EST) or UTC-4 (EDT). Use Intl to get ET hours/minutes robustly.
+  const et=new Date(d.toLocaleString('en-US',{timeZone:'America/New_York'}));
+  const mins=et.getHours()*60+et.getMinutes();
+  if(mins<570) return 'pre';        // before 9:30
+  if(mins<960) return 'reg';        // 9:30-16:00
+  if(mins<1200) return 'post';      // 16:00-20:00
+  return 'pre';                     // late night folds into pre shading
+}
+
+function renderChart(){
+  const cv=$('chartCanvas'),ctx=cv.getContext('2d');
+  const W=cv.width=cv.clientWidth, H=cv.height=cv.clientHeight;
+  ctx.clearRect(0,0,W,H); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+  const s=chartState;
+  const i0=s.viewStart, i1=Math.min(s.bars.length, s.viewStart+s.viewCount);
+  if(i1<=i0) return;
+  const intraday = ['10Min','15Min','30Min','1Hour'].includes(s.tf);
+
+  // Layout: volume panel only when maximized AND intraday (room + relevance).
+  const showVol = s.maximized && intraday;
+  const padL=8, padR=62, padT=10, padBx=26;     // x-axis label band
+  const volH = showVol ? Math.round((H-padT-padBx)*0.18) : 0;
+  const volGap = showVol ? 8 : 0;
+  const plotW = W-padL-padR;
+  const plotH = H-padT-padBx-volH-volGap;        // price panel height
+  const volTop = padT+plotH+volGap;
+
+  // price range over visible bars + visible EMAs
+  let lo=Infinity,hi=-Infinity, vmax=0;
+  for(let i=i0;i<i1;i++){
+    lo=Math.min(lo,s.bars[i].l); hi=Math.max(hi,s.bars[i].h);
+    vmax=Math.max(vmax, s.bars[i].v||0);
+    const checkKeys=[];
+    if(s.layers.c89) checkKeys.push('e8','e9');
+    if(s.layers.c512) checkKeys.push('e5','e12');
+    if(s.layers.c3450) checkKeys.push('e34','e50');
+    for(const k of checkKeys){const v=s.ema[k]&&s.ema[k][i]; if(v!=null){lo=Math.min(lo,v);hi=Math.max(hi,v);}}
+    if(s.layers.macro&&intraday){const mv=macroAtTime(s.bars[i].t); if(mv){lo=Math.min(lo,mv.e34,mv.e50);hi=Math.max(hi,mv.e34,mv.e50);}}
   }
-  for (let y = 0; y < cv.height; y += 40) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cv.width, y); ctx.stroke();
+  const padP=(hi-lo)*0.06||1; lo-=padP; hi+=padP;
+  { const mid=(lo+hi)/2, half=(hi-lo)/2/s.priceZoom;
+    const span=half*2, shift=s.priceOffset*span;
+    lo=mid-half-shift; hi=mid+half-shift; }
+
+  const view=i1-i0;
+  const x=i=>padL+((i-i0)+0.5)/view*plotW;
+  const y=p=>padT+(hi-p)/(hi-lo)*plotH;
+  const cw=Math.max(1.5, plotW/view*0.70);
+
+  // ── session background shading (per contiguous run) ──
+  if(intraday){
+    let runStart=i0, runSess=sessionOf(s.bars[i0].t);
+    const fillFor=ss=> ss==='pre' ? 'rgba(245,224,150,0.28)'      // butter yellow
+                     : ss==='post'? 'rgba(20,40,90,0.07)'         // light navy
+                     : null;                                       // reg = white
+    const paint=(a,b,ss)=>{ const f=fillFor(ss); if(!f) return;
+      const xa=padL+((a-i0))/view*plotW, xb=padL+((b-i0+1))/view*plotW;
+      ctx.fillStyle=f; ctx.fillRect(xa,padT,xb-xa,plotH+(showVol?volGap+volH:0)); };
+    for(let i=i0+1;i<i1;i++){ const ss=sessionOf(s.bars[i].t);
+      if(ss!==runSess){ paint(runStart,i-1,runSess); runStart=i; runSess=ss; } }
+    paint(runStart,i1-1,runSess);
   }
-  ctx.fillStyle = '#5b6478'; ctx.font = '13px Segoe UI';
-  ctx.fillText('chart: next build pass (candles + EMA clouds)', 16, 26);
+
+  // ── horizontal price grid + right axis ──
+  ctx.strokeStyle='#eef1f6'; ctx.fillStyle='#8a93a8'; ctx.font='10px Segoe UI'; ctx.lineWidth=1;
+  for(let g=0;g<=5;g++){const p=lo+(hi-lo)*g/5,yy=y(p);
+    ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(padL+plotW,yy);ctx.stroke();
+    ctx.fillText(p.toFixed(2),padL+plotW+4,yy+3);}
+
+  // ── vertical day gridlines ──
+  ctx.strokeStyle='#eef1f6'; let lastDay=null;
+  for(let i=i0;i<i1;i++){const d=new Date(s.bars[i].t);
+    const dk=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();
+    if(dk!==lastDay){lastDay=dk;const px=x(i);
+      ctx.beginPath();ctx.moveTo(px,padT);ctx.lineTo(px,padT+plotH);ctx.stroke();}}
+
+  function emaLine(key,color,width){const arr=s.ema[key];if(!arr)return;
+    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();let st=false;
+    for(let i=i0;i<i1;i++){const v=arr[i];if(v==null){st=false;continue;}
+      const px=x(i),py=y(v);if(!st){ctx.moveTo(px,py);st=true;}else ctx.lineTo(px,py);}ctx.stroke();}
+  function emaCloud(kA,kB,fill){const a=s.ema[kA],b=s.ema[kB];if(!a||!b)return;
+    ctx.fillStyle=fill;ctx.beginPath();const pts=[];
+    for(let i=i0;i<i1;i++){if(a[i]!=null&&b[i]!=null)pts.push([x(i),y(a[i]),y(b[i])]);}
+    if(pts.length<2)return;ctx.moveTo(pts[0][0],pts[0][1]);
+    for(let k=1;k<pts.length;k++)ctx.lineTo(pts[k][0],pts[k][1]);
+    for(let k=pts.length-1;k>=0;k--)ctx.lineTo(pts[k][0],pts[k][2]);ctx.closePath();ctx.fill();}
+
+  // MTF layers underneath candles
+  if(s.layers.macro&&intraday){ctx.fillStyle='rgba(20,40,90,0.07)';ctx.beginPath();
+    const top=[],bot=[];
+    for(let i=i0;i<i1;i++){const mv=macroAtTime(s.bars[i].t);if(!mv)continue;
+      top.push([x(i),y(Math.max(mv.e34,mv.e50))]);bot.push([x(i),y(Math.min(mv.e34,mv.e50))]);}
+    if(top.length>1){ctx.moveTo(top[0][0],top[0][1]);
+      for(let k=1;k<top.length;k++)ctx.lineTo(top[k][0],top[k][1]);
+      for(let k=bot.length-1;k>=0;k--)ctx.lineTo(bot[k][0],bot[k][1]);ctx.closePath();ctx.fill();}}
+  if(s.layers.c3450){emaCloud('e34','e50','rgba(178,32,48,0.10)');
+    emaLine('e34','rgba(178,32,48,0.55)',1);emaLine('e50','rgba(178,32,48,0.45)',1);}
+
+  // ── candles ──
+  const GREEN='#1e7e4d', RED='#c0392b';
+  for(let i=i0;i<i1;i++){const b=s.bars[i],px=x(i),up=b.c>=b.o;
+    ctx.strokeStyle=up?GREEN:RED;ctx.fillStyle=up?GREEN:RED;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(px,y(b.h));ctx.lineTo(px,y(b.l));ctx.stroke();
+    const yo=y(b.o),yc=y(b.c),top=Math.min(yo,yc),hgt=Math.max(1,Math.abs(yc-yo));
+    ctx.fillRect(px-cw/2,top,cw,hgt);}
+
+  // fast clouds on top
+  if(s.layers.c512){emaCloud('e5','e12','rgba(30,126,77,0.12)');
+    emaLine('e5','rgba(30,126,77,0.85)',1.4);emaLine('e12','rgba(20,40,90,0.7)',1.2);}
+  if(s.layers.c89){emaCloud('e8','e9','rgba(214,140,20,0.30)');
+    emaLine('e8','rgba(214,140,20,0.9)',1);emaLine('e9','rgba(214,140,20,0.6)',1);}
+
+  // ── live-price tag on right axis (last visible close) ──
+  {
+    const lastB=s.bars[i1-1]; if(lastB){const lp=lastB.c, up=lastB.c>=lastB.o;
+      const yy=Math.max(padT, Math.min(padT+plotH, y(lp)));
+      ctx.fillStyle=up?GREEN:RED; ctx.fillRect(padL+plotW, yy-8, padR, 16);
+      ctx.fillStyle='#fff'; ctx.font='10px Segoe UI';
+      ctx.fillText(lp.toFixed(2), padL+plotW+4, yy+3);
+      ctx.strokeStyle=up?GREEN:RED; ctx.lineWidth=1; ctx.setLineDash([2,2]);
+      ctx.beginPath();ctx.moveTo(padL,yy);ctx.lineTo(padL+plotW,yy);ctx.stroke();ctx.setLineDash([]);}
+  }
+
+  // ── volume panel (maximized intraday only) ──
+  if(showVol && vmax>0){
+    for(let i=i0;i<i1;i++){const b=s.bars[i],px=x(i),up=b.c>=b.o;
+      const vh=(b.v||0)/vmax*(volH-4);
+      ctx.fillStyle=up?'rgba(30,126,77,0.45)':'rgba(192,57,43,0.45)';
+      ctx.fillRect(px-cw/2, volTop+volH-vh, cw, vh);}
+    ctx.strokeStyle='#eef1f6';ctx.beginPath();
+    ctx.moveTo(padL,volTop);ctx.lineTo(padL+plotW,volTop);ctx.stroke();
+    ctx.fillStyle='#8a93a8';ctx.font='9px Segoe UI';
+    ctx.fillText('Vol', padL+2, volTop+10);
+  }
+
+  // ── x-axis labels ──
+  ctx.fillStyle='#8a93a8';ctx.font='10px Segoe UI';lastDay=null;
+  const step=Math.max(1,Math.floor(view/6));
+  for(let i=i0;i<i1;i+=step){const d=new Date(s.bars[i].t);
+    const dk=d.getFullYear()+'-'+d.getMonth()+'-'+d.getDate();
+    const withDate=dk!==lastDay; lastDay=dk;
+    ctx.fillText(fmtAxisTime(s.bars[i].t,withDate), x(i)-16, H-8);}
+
+  // ── crosshair + OHLC legend ──
+  let legendBar=null;
+  if(s.mouse){const mx=s.mouse.x,my=s.mouse.y;
+    if(mx>=padL&&mx<=padL+plotW&&my>=padT&&my<=padT+plotH+volH+volGap){
+      const idx=Math.min(i1-1,Math.max(i0,Math.round(i0+(mx-padL)/plotW*view-0.5)));
+      legendBar=s.bars[idx]; const px=x(idx);
+      ctx.strokeStyle='rgba(20,40,90,0.4)';ctx.lineWidth=1;ctx.setLineDash([4,3]);
+      ctx.beginPath();ctx.moveTo(px,padT);ctx.lineTo(px,padT+plotH);
+      if(my<=padT+plotH){ctx.moveTo(padL,my);ctx.lineTo(padL+plotW,my);}
+      ctx.stroke();ctx.setLineDash([]);
+      if(my<=padT+plotH){
+        const price=hi-(my-padT)/plotH*(hi-lo);
+        ctx.fillStyle='#0a1430';ctx.fillRect(padL+plotW,my-8,padR,16);
+        ctx.fillStyle='#fff';ctx.font='10px Segoe UI';ctx.fillText(price.toFixed(2),padL+plotW+4,my+3);}
+      const tlabel=fmtAxisTime(s.bars[idx].t,true);
+      const tw=ctx.measureText(tlabel).width+8;
+      ctx.fillStyle='#0a1430';ctx.fillRect(px-tw/2,H-padBx+4,tw,15);
+      ctx.fillStyle='#fff';ctx.fillText(tlabel,px-tw/2+4,H-padBx+15);
+    }
+  }
+  // OHLC legend top-left (hovered bar, else last bar)
+  {
+    const b = legendBar || s.bars[i1-1];
+    if(b){const up=b.c>=b.o, chg=b.c-b.o, chgPct=b.o?chg/b.o*100:0;
+      ctx.font='11px Segoe UI'; const segs=[
+        ['O', b.o.toFixed(2)], ['H', b.h.toFixed(2)],
+        ['L', b.l.toFixed(2)], ['C', b.c.toFixed(2)]];
+      let lx=padL+4; const ly=padT+13;
+      ctx.fillStyle='#5b6478'; ctx.fillText(s.ticker+'  '+TF_LABEL[s.tf], lx, ly);
+      lx += ctx.measureText(s.ticker+'  '+TF_LABEL[s.tf]).width + 12;
+      for(const [k,v] of segs){
+        ctx.fillStyle='#8a93a8'; ctx.fillText(k, lx, ly); lx+=ctx.measureText(k).width+3;
+        ctx.fillStyle=up?GREEN:RED; ctx.fillText(v, lx, ly); lx+=ctx.measureText(v).width+10;}
+      ctx.fillStyle=up?GREEN:RED;
+      const ct=(chg>=0?'+':'')+chg.toFixed(2)+' ('+(chg>=0?'+':'')+chgPct.toFixed(2)+'%)';
+      ctx.fillText(ct, lx, ly);
+    }
+  }
+}
+
+function startPriceTicker(){
+  if(window._priceTimer) return;
+  window._priceTimer=setInterval(async()=>{
+    const t=chartState.ticker; if(!t) return;
+    try{
+      const h=await api('/api/health'); if(!h.connected) return;
+      const r=await fetch(`/api/quote/${t}`).then(x=>x.json()).catch(()=>null);
+      if(r&&typeof r.mid==='number'){
+        const el=$('chartPrice'); const prev=chartState.lastPrice;
+        el.textContent=' $'+r.mid.toFixed(2);
+        el.style.color = prev==null?'#5b6478':(r.mid>prev?'#1e7e4d':(r.mid<prev?'#c0392b':'#5b6478'));
+        chartState.lastPrice=r.mid;
+      }
+    }catch(e){}
+  },1000);
+}
+
+function setTimeframe(tf){ chartState.tf=tf;
+  document.querySelectorAll('.tf-chip').forEach(c=>c.className='tf-chip'+(c.dataset.tf===tf?' on':''));
+  loadChartBars(); }
+
+function toggleMaximize(){
+  const card=$('card-chart'), back=$('chartBackdrop');
+  chartState.maximized=!chartState.maximized;
+  card.classList.toggle('maxed', chartState.maximized);
+  back.classList.toggle('show', chartState.maximized);
+  $('chartMax').textContent = chartState.maximized ? '✕' : '⛶';
+  $('chartMax').title = chartState.maximized ? 'restore' : 'maximize';
+  // Canvas must re-measure after the box resizes, then redraw.
+  requestAnimationFrame(()=>{ renderChart(); });
+}
+
+function toggleChartLayer(which){
+  const map={ema89:'c89',ema512:'c512',ema3450:'c3450',macro:'macro'};
+  const key=map[which]; if(!key)return;
+  chartState.layers[key]=!chartState.layers[key];
+  const ids={c89:'t89',c512:'t512',c3450:'t3450',macro:'tmacro'};
+  const el=$(ids[key]); if(el) el.className='chip'+(chartState.layers[key]?' on':'');
+  renderChart();
+}
+
+function wireChartInteraction(){
+  const cv=$('chartCanvas'); if(!cv||cv._wired)return; cv._wired=true;
+  cv.addEventListener('mousedown',e=>{
+    chartState.drag={x:e.clientX,y:e.clientY,start:chartState.viewStart,
+                     offset:chartState.priceOffset};});
+  window.addEventListener('mouseup',()=>{chartState.drag=null;});
+  cv.addEventListener('mousemove',e=>{
+    const rect=cv.getBoundingClientRect();
+    chartState.mouse={x:e.clientX-rect.left,y:e.clientY-rect.top};
+    if(chartState.drag&&chartState.bars.length){
+      const cw=cv.clientWidth/chartState.viewCount;
+      const dB=Math.round((e.clientX-chartState.drag.x)/cw);
+      let ns=chartState.drag.start-dB;
+      ns=Math.max(0,Math.min(chartState.bars.length-chartState.viewCount,ns));
+      chartState.viewStart=ns;
+      if(chartState.priceZoom>1.001){
+        const dy=(e.clientY-chartState.drag.y)/cv.clientHeight;
+        chartState.priceOffset=chartState.drag.offset - dy;
+      }
+    }
+    renderChart();
+  });
+  cv.addEventListener('mouseleave',()=>{chartState.mouse=null;renderChart();});
+  cv.addEventListener('dblclick',()=>{
+    chartState.priceZoom=1; chartState.priceOffset=0; renderChart();});
+  cv.addEventListener('wheel',e=>{
+    if(!chartState.bars.length)return; e.preventDefault();
+    if(e.shiftKey){
+      const f=e.deltaY>0?0.9:1.1;
+      chartState.priceZoom=Math.max(1,Math.min(12,chartState.priceZoom*f));
+      if(chartState.priceZoom===1) chartState.priceOffset=0;
+      renderChart(); return;
+    }
+    const f=e.deltaY>0?1.15:0.87; let nc=Math.round(chartState.viewCount*f);
+    nc=Math.max(15,Math.min(chartState.bars.length,nc));
+    const right=chartState.viewStart+chartState.viewCount;
+    chartState.viewCount=nc;
+    chartState.viewStart=Math.max(0,Math.min(chartState.bars.length-nc,right-nc));
+    renderChart();
+  },{passive:false});
 }
 
 /* ── manual trade ── */
@@ -573,6 +927,7 @@ async function refreshLogs() {
 
 /* ── boot ── */
 function refreshAll() { refreshHealth(); refreshPositions(); }
+wireChartInteraction();
 refreshAll();
 setInterval(refreshHealth, 5000);
 setInterval(refreshPositions, 10000);
