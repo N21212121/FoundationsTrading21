@@ -547,18 +547,17 @@ def _evaluate_ticker(ticker, cfg, pos):
                     open_position_direction=eval_dir)
 
     # Log every decision
-    s2 = d.get('step2') or {}
+    ctx = d.get('step2') or {}
     cm.log_signal(
         ticker=ticker, bar_time=newest,
-        launch_gate_passed=(d.get('gate') or {}).get('passed', ''),
-        launch_gate_reason=(d.get('gate') or {}).get('reason', ''),
-        step2_votes_long=(s2.get('tally') or {}).get('L', ''),
-        step2_votes_short=(s2.get('tally') or {}).get('S', ''),
-        step2_votes_hold=(s2.get('tally') or {}).get('H', ''),
-        step2_result=s2.get('result', ''),
-        step3_macro_state=(d.get('step3') or {}).get('state', ''),
-        step3_result='confirmed' if (d.get('step3') or {}).get('confirmed')
-                     else ('rejected' if d.get('step3') else ''),
+        gate_passed=(d.get('gate') or {}).get('passed', ''),
+        gate_reason=(d.get('gate') or {}).get('reason', ''),
+        trend=ctx.get('trend', ''),
+        trigger=('fresh_long' if ctx.get('fresh_long')
+                 else ('fresh_short' if ctx.get('fresh_short') else 'none')),
+        price_vs_5_12=ctx.get('price_vs_5_12', ''),
+        price_vs_34_50=ctx.get('price_vs_34_50', ''),
+        exit_kind=d.get('exit_kind') or '',
         final_action=(_invert_action(d['action']) if INVERT_SIGNALS
                       else d['action']),
         notes=(('INVERTED; ' if INVERT_SIGNALS else '')
@@ -904,12 +903,21 @@ def dashboard():
     cfg = cm.load_config()
     pos = _positions()
     equity = None
-    broker = {}
+    broker = {}              # raw broker rows by exact symbol
+    broker_opt_by_under = {} # option broker rows grouped by underlying ticker
+    broker_shares = {}       # share broker rows by ticker
     if alpaca.is_connected():
         try:
             equity = alpaca.get_account()['equity']
             for b in alpaca.get_positions():
-                broker[b['symbol']] = b
+                sym = b['symbol']
+                broker[sym] = b
+                is_option = (str(b.get('asset_class', '')).lower().endswith('option')
+                             or len(sym) > 15)
+                if is_option:
+                    broker_opt_by_under.setdefault(_occ_underlying(sym), []).append(b)
+                else:
+                    broker_shares[sym] = b
         except Exception:
             pass
 
@@ -923,17 +931,25 @@ def dashboard():
     for t in sorted(tickers):
         p = pos.get(t, {})
         # share leg (broker symbol == ticker)
-        sh = broker.get(t, {})
+        sh = broker_shares.get(t, {})
         value = float(sh.get('market_value') or 0)
         pl = float(sh.get('unrealized_pl') or 0)
         cost = float(sh.get('cost_basis') or 0)
-        # option leg (broker symbol == OCC option symbol)
-        osym = p.get('option_symbol')
-        if osym and osym in broker:
-            bo = broker[osym]
+        shares_qty = int(float(sh.get('qty') or p.get('shares') or 0))
+
+        # option leg: match ANY broker option whose underlying is this ticker,
+        # so a broker position shows even if state's symbol is missing/stale.
+        opt_contracts = 0
+        opt_symbol = p.get('option_symbol', '')
+        for bo in broker_opt_by_under.get(t, []):
             value += float(bo.get('market_value') or 0)
             pl += float(bo.get('unrealized_pl') or 0)
             cost += float(bo.get('cost_basis') or 0)
+            opt_contracts += int(abs(float(bo.get('qty') or 0)))
+            opt_symbol = opt_symbol or bo.get('symbol', '')
+        # fall back to state's count only if the broker showed nothing
+        if opt_contracts == 0:
+            opt_contracts = int(p.get('option_contracts') or 0)
 
         # Set $: the engine's per-entry budget for this ticker, stable and
         # independent of current deployment = allocation_pct x equity.
@@ -951,8 +967,8 @@ def dashboard():
                           for w in cfg.get('watchlist', [])
                           if w['ticker'].upper() == t), None),
             'direction': p.get('direction', ''),
-            'shares': p.get('shares', 0),
-            'contracts': p.get('option_contracts', 0),
+            'shares': shares_qty,
+            'contracts': opt_contracts,
             'set_dollars': round(set_dollars, 2),
             'value': round(value, 2),
             'pl': round(pl, 2),
