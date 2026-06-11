@@ -152,11 +152,30 @@ def _do_entry(ticker, direction, cfg, source='engine'):
     pos[ticker] = p
     _save_positions(pos)
 
-    cm.log_trade(ticker=ticker, side=direction.upper(), sleeve='COMBO',
-                 action='BUY', qty=len(result['filled']),
-                 price=spot, status='submitted',
-                 reason=f"{source} entry ({plan['reason']}); "
-                        f"{len(result['failed'])} leg(s) failed")
+    for f in result['filled']:
+        leg = f['leg']; fill = f.get('fill') or {}
+        if leg['kind'] == 'option':
+            cm.log_trade(ticker=ticker, side=direction.upper(), sleeve='OPTIONS',
+                         action='BUY',
+                         qty=int(fill.get('filled_qty') or leg.get('contracts') or 0),
+                         price=fill.get('filled_avg_price') or leg.get('est_premium', ''),
+                         status=fill.get('status', 'submitted'),
+                         reason=f"{source} entry ({plan['reason']})",
+                         option_symbol=leg.get('symbol', ''),
+                         option_strike=leg.get('strike', ''),
+                         option_expiry=leg.get('expiry', ''),
+                         option_type=leg.get('type', ''))
+        else:
+            cm.log_trade(ticker=ticker, side=direction.upper(), sleeve='SHARES',
+                         action='BUY',
+                         qty=int(fill.get('filled_qty') or leg.get('qty') or 0),
+                         price=fill.get('filled_avg_price') or leg.get('est_price', ''),
+                         status=fill.get('status', 'submitted'),
+                         reason=f"{source} entry ({plan['reason']})")
+    if result['failed']:
+        cm.log_trade(ticker=ticker, side=direction.upper(), sleeve='COMBO',
+                     action='BUY', qty=0, price='', status='failed',
+                     reason=f"{source} entry: {len(result['failed'])} leg(s) failed")
     return {'ok': True, 'filled': len(result['filled']),
             'failed': len(result['failed'])}
 
@@ -181,13 +200,65 @@ def _do_exit(ticker, sleeve, trigger, is_stop):
         if not legs:
             return {'ok': False, 'reason': 'nothing to sell for that sleeve'}
 
-        tr.execute_plan(alpaca, ticker, legs, reason=trigger)
+        # Snapshot entry prices BEFORE we clear state, for P/L.
+        opt_entry = float(p.get('option_entry_premium') or 0)
+        sh_entry = float(p.get('share_entry_price') or 0)
+        opt_qty = int(p.get('option_contracts') or 0)
+        sh_qty = int(p.get('shares') or 0)
+        opt_sym = p.get('option_symbol', '')
+        opt_type = p.get('option_type', '')
+        direction = (p.get('direction') or '').upper()
+
+        result = tr.execute_plan(alpaca, ticker, legs, reason=trigger)
 
         if is_stop:
             for leg in legs:
                 tr.mark_stop_out(_no_rebuy, ticker,
                                  'options' if leg['kind'] == 'option' else 'shares')
             _save_no_rebuy()
+
+        # Realized P/L per sleeve, computed from confirmed exit fills against
+        # the stored entry prices. Both instruments are long-the-position
+        # (buy-to-open, sell-to-close), so P/L = (exit - entry) * qty * mult.
+        for f in result.get('filled', []):
+            leg = f['leg']
+            fill = f.get('fill') or {}
+            xprice = fill.get('filled_avg_price')
+            if leg['kind'] == 'option':
+                xqty = int(fill.get('filled_qty') or opt_qty)
+                exitpx = float(xprice) if xprice not in (None, '') else None
+                pnl_d = ((exitpx - opt_entry) * xqty * 100
+                         if exitpx is not None and opt_entry else None)
+                pnl_p = ((exitpx - opt_entry) / opt_entry * 100
+                         if exitpx is not None and opt_entry else None)
+                cm.log_trade(ticker=ticker, side=direction, sleeve='OPTIONS',
+                             action='SELL', qty=xqty,
+                             price=round(exitpx, 4) if exitpx is not None else '',
+                             status=fill.get('status', 'submitted'),
+                             reason=trigger,
+                             pnl_dollars=round(pnl_d, 2) if pnl_d is not None else '',
+                             pnl_pct=round(pnl_p, 2) if pnl_p is not None else '',
+                             option_symbol=opt_sym, option_type=opt_type)
+            else:
+                xqty = int(fill.get('filled_qty') or sh_qty)
+                exitpx = float(xprice) if xprice not in (None, '') else None
+                pnl_d = ((exitpx - sh_entry) * xqty
+                         if exitpx is not None and sh_entry else None)
+                pnl_p = ((exitpx - sh_entry) / sh_entry * 100
+                         if exitpx is not None and sh_entry else None)
+                cm.log_trade(ticker=ticker, side=direction, sleeve='SHARES',
+                             action='SELL', qty=xqty,
+                             price=round(exitpx, 4) if exitpx is not None else '',
+                             status=fill.get('status', 'submitted'),
+                             reason=trigger,
+                             pnl_dollars=round(pnl_d, 2) if pnl_d is not None else '',
+                             pnl_pct=round(pnl_p, 2) if pnl_p is not None else '')
+
+        # If nothing confirmed filled, still log the attempt so the exit is visible.
+        if not result.get('filled'):
+            cm.log_trade(ticker=ticker, side=direction, sleeve=sleeve.upper(),
+                         action='SELL', qty=0, price='', status='failed',
+                         reason=trigger + ' (no confirmed fill)')
 
         # Clear sold sleeves from state (under the same lock as the in-flight flag)
         with _state_lock:
@@ -205,9 +276,6 @@ def _do_exit(ticker, sleeve, trigger, is_stop):
                 pos[ticker] = p
             _save_positions(pos)
 
-        cm.log_trade(ticker=ticker, side=(p.get('direction') or '').upper(),
-                     sleeve=sleeve.upper(), action='SELL', qty=len(legs),
-                     price='', status='submitted', reason=trigger)
         return {'ok': True}
     finally:
         with _state_lock:
@@ -703,6 +771,101 @@ def logs(kind):
     if not reader:
         return jsonify({'error': 'unknown log kind'}), 404
     return jsonify(reader(ticker=ticker, limit=limit))
+
+
+@app.route('/api/quote/<ticker>')
+def quote(ticker):
+    """Single live quote for the chart price ticker (polled ~1/s)."""
+    if not alpaca.is_connected():
+        return jsonify({'error': 'not connected'}), 400
+    q = alpaca.get_quote(ticker.upper())
+    if not q:
+        return jsonify({'error': 'no quote'}), 404
+    return jsonify(q)
+
+
+@app.route('/api/bars/<ticker>')
+def bars(ticker):
+    """Bars + EMAs for the chart. Server-side EMA computation using the
+    SAME signal_engine.ema the trading decisions use, so the clouds drawn
+    are exactly the clouds the engine evaluates on.
+
+    Query params:
+      tf     - timeframe (default '10Min')
+      limit  - bar count (default 500, max 1000)
+
+    Returns:
+      {
+        'ticker', 'tf',
+        'bars':  [{t, o, h, l, c, v}, ...],
+        'ema':   {'e5':[...], 'e12':[...], 'e34':[...], 'e50':[...]},
+        'macro': {'time':[...], 'e34':[...], 'e50':[...]}  # 1H cloud
+      }
+    EMA arrays align 1:1 with bars (None until warmed). macro arrays are the
+    1-hour cloud sampled at its own bar times; the client steps them onto the
+    10-min axis."""
+    ticker = ticker.upper()
+    tf = request.args.get('tf', '10Min')
+    try:
+        limit = max(50, min(1000, int(request.args.get('limit', 500))))
+    except (TypeError, ValueError):
+        limit = 500
+
+    if not alpaca.is_connected():
+        return jsonify({'error': 'not connected'}), 400
+
+    bars = alpaca.get_bars(ticker, tf, limit=limit)
+    if not bars:
+        return jsonify({'ticker': ticker, 'tf': tf, 'bars': [],
+                        'ema': {}, 'macro': {}})
+
+    df = se.bars_to_df(bars)
+    closes = df['close']
+
+    def series(period):
+        s = se.ema(closes, period)
+        # Mask the warmup region (first `period` points) to None so the cloud
+        # doesn't draw a misleading line before it's meaningful.
+        out = []
+        for i, v in enumerate(s.tolist()):
+            out.append(round(float(v), 4) if i >= period else None)
+        return out
+
+    P_FAST = getattr(se, 'EMA_FAST', 5)
+    P_SLOW = getattr(se, 'EMA_SLOW', 12)
+    P_C1 = getattr(se, 'EMA_CLOUD_FAST', getattr(se, 'EMA_CLOUD1', 34))
+    P_C2 = getattr(se, 'EMA_CLOUD_SLOW', getattr(se, 'EMA_CLOUD2', 50))
+
+    ema = {'e8': series(8), 'e9': series(9),
+           'e5': series(P_FAST), 'e12': series(P_SLOW),
+           'e34': series(P_C1), 'e50': series(P_C2)}
+
+    out_bars = [{'t': b['time'], 'o': b['open'], 'h': b['high'],
+                 'l': b['low'], 'c': b['close'], 'v': b['volume']}
+                for b in bars]
+
+    # Macro 1-hour cloud (Step 3 filter made visible).
+    macro = {}
+    try:
+        hbars = alpaca.get_bars(ticker, '1Hour', limit=250)
+        if hbars and len(hbars) > P_C2:
+            hdf = se.bars_to_df(hbars)
+            hc = hdf['close']
+            he34 = se.ema(hc, P_C1).tolist()
+            he50 = se.ema(hc, P_C2).tolist()
+            macro = {
+                'time': [b['time'] for b in hbars],
+                'e34': [round(float(x), 4) for x in he34],
+                'e50': [round(float(x), 4) for x in he50],
+            }
+    except Exception as e:
+        cm.log_forensic('api_event', event='bars_macro', ticker=ticker,
+                        status='error', error=str(e))
+
+    return jsonify({'ticker': ticker, 'tf': tf, 'bars': out_bars,
+                    'ema': ema, 'macro': macro,
+                    'periods': {'fast': P_FAST, 'slow': P_SLOW,
+                                'c1': P_C1, 'c2': P_C2}})
 
 
 @app.route('/')
