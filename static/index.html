@@ -461,7 +461,7 @@ async function refreshPositions() {
       $('detailsBody').innerHTML = '<span style="color:var(--text-dim)">' +
         selected + ': watched, no open position.</span>';
       $('chartTicker').textContent = selected;
-      drawChart(selected);
+      if (chartState.ticker !== selected) drawChart(selected);
     }
   }
 }
@@ -514,7 +514,7 @@ function renderDetails(ticker, p) {
     `</div>`;
   $('detailsBody').innerHTML = h;
   $('chartTicker').textContent = ticker;
-  drawChart(ticker);
+  if (chartState.ticker !== ticker) drawChart(ticker);
 }
 
 /* ── chart placeholder ── */
