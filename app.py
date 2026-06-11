@@ -95,6 +95,42 @@ def _budget_for(ticker, cfg):
 
 def _do_entry(ticker, direction, cfg, source='engine'):
     """Plan and execute an entry. Returns a result dict for logging."""
+    # ── ONE POSITION PER TICKER (engine only) ──
+    # The engine must never add to a ticker it already holds. Signals
+    # re-firing on consecutive bars must NOT pyramid. Manual adds are
+    # deliberate and remain allowed (they reset peaks elsewhere).
+    if source == 'engine' and ticker in _positions():
+        return {'ok': False,
+                'reason': 'position already open; engine add blocked'}
+
+    # ── SET-BUDGET CEILING (engine only) ──
+    # Total position value (both sleeves) may never exceed the ticker's Set
+    # budget = allocation_pct x equity. Hard refuse, no trim. Manual entries
+    # are exempt by the user's rule. Belt-and-suspenders with the guard above:
+    # even if a position somehow existed without blocking, this stops growth.
+    if source == 'engine':
+        try:
+            set_dollars = _budget_for(ticker, cfg)
+            cur_val = 0.0
+            p_existing = _positions().get(ticker)
+            if p_existing:
+                q0 = alpaca.get_quote(ticker)
+                if q0 and p_existing.get('shares'):
+                    cur_val += p_existing['shares'] * q0['mid']
+                osym = p_existing.get('option_symbol')
+                if osym and p_existing.get('option_contracts'):
+                    oq0 = alpaca.get_options_quote(osym)
+                    if oq0 and oq0.get('mid') is not None:
+                        cur_val += p_existing['option_contracts'] * oq0['mid'] * 100
+            if cur_val >= set_dollars > 0:
+                return {'ok': False,
+                        'reason': f'at/over Set budget '
+                                  f'(${cur_val:.0f} >= ${set_dollars:.0f}); '
+                                  f'engine entry refused'}
+        except Exception as e:
+            cm.log_forensic('api_event', event='set_cap_check', ticker=ticker,
+                            status='error', error=str(e))
+
     # No-rebuy guard (stops set these; profit exits don't).
     # Long entries open both sleeves -> refuse if EITHER sleeve was stopped.
     # Short entries are puts-only -> refuse only on an options block (a short
