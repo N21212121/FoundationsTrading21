@@ -8,12 +8,13 @@
     --bg: #f2f3f6;
     --card: #ffffff;
     --card-2: #e9ecf2;
-    --navy: #0a1430;
-    --navy-2: #111d40;
-    --navy-3: #1a2a55;
-    --scarlet: #b22030; --scarlet-bright: #e03545;
-    --text: #18223a;
-    --text-dim: #5b6478;
+    /* Pantone 646C blue family + 106C yellow */
+    --navy: #2b3a52;        /* dark readable blue (text/structure) */
+    --navy-2: #7B92B2;      /* 646C — topbar / brand */
+    --navy-3: #6a82a4;      /* deeper blue — active/hover fills */
+    --scarlet: #F9E04C; --scarlet-bright: #F9E04C;  /* 106C yellow (fills) */
+    --text: #2b3a52;        /* dark blue text */
+    --text-dim: #6a7689;
     --green: #1e7e4d; --red: #c0392b; --border: #c9cfdc;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -24,27 +25,28 @@
   }
 
   #topbar {
-    display: flex; align-items: center; gap: 16px;
-    padding: 10px 18px; background: var(--navy-2);
-    border-bottom: 2px solid var(--scarlet);
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 18px; background: var(--navy-2);
+    border-bottom: 3px solid var(--scarlet);
   }
-  #topbar h1 { font-size: 17px; color: var(--scarlet-bright); letter-spacing: 1px; }
+  #topLogo { height: 34px; width: auto; display: block; }
+  #topbar h1 { font-size: 17px; color: #ffffff; letter-spacing: 1px; }
   .tab {
     padding: 6px 14px; cursor: pointer; border-radius: 4px;
-    color: #8a93a8; user-select: none;
+    color: rgba(255,255,255,0.8); user-select: none;
   }
-  .tab.active { background: var(--navy-3); color: #e8ecf4; }
+  .tab.active { background: var(--navy-3); color: #ffffff; }
   #status { margin-left: auto; display: flex; gap: 14px; align-items: center;
-            font-size: 12.5px; color: #8a93a8; }
+            font-size: 12.5px; color: rgba(255,255,255,0.85); }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
          margin-right: 5px; background: var(--red); }
   .dot.on { background: #2fae6e; }
   #engineBtn {
-    padding: 5px 12px; border-radius: 4px; border: 1px solid #243458;
-    background: var(--navy-3); color: #c8cfdd; cursor: pointer;
+    padding: 5px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35);
+    background: var(--navy-3); color: #ffffff; cursor: pointer;
     font-size: 12.5px;
   }
-  #engineBtn.armed { background: var(--scarlet); color: #fff;
+  #engineBtn.armed { background: var(--scarlet); color: var(--navy);
                      border-color: var(--scarlet-bright); }
 
   #dash {
@@ -83,7 +85,7 @@
         font-size: 13px; }
   .kv .k { color: var(--text-dim); }
   .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
-  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: var(--scarlet);
+  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: #5a7099;
                    text-transform: uppercase; letter-spacing: 1px; }
 
   #chartCanvas { flex: 1 1 auto; min-height: 180px; width: 100%;
@@ -106,7 +108,7 @@
   }
   button:hover { border-color: var(--scarlet); }
   button.buy { background: var(--scarlet); border-color: var(--scarlet-bright);
-               color: #fff; }
+               color: var(--navy); font-weight: 600; }
   button.sell { background: #fff; }
   #tradeMsg { font-size: 12.5px; color: var(--text-dim); min-height: 18px;
               margin-top: 6px; }
@@ -144,7 +146,7 @@
   .tf-chip:first-child { border-left:1px solid var(--border);
                          border-radius:5px 0 0 5px; }
   .tf-chip:last-child { border-radius:0 5px 5px 0; }
-  .tf-chip.on { background:var(--scarlet); color:#fff; border-color:var(--scarlet); }
+  .tf-chip.on { background:var(--scarlet); color:var(--navy); font-weight:600; border-color:var(--scarlet); }
 
   .mode-pill { display: inline-block; min-width: 56px; text-align: center;
                padding: 2px 8px; border-radius: 10px; font-size: 11.5px;
@@ -178,13 +180,24 @@
     display: flex; justify-content: flex-end; gap: 8px;
     padding: 12px 18px; background: var(--card-2);
   }
-  #modalConfirm { background: var(--scarlet); color: #fff;
+  #modalConfirm { background: var(--scarlet); color: var(--navy); font-weight: 600;
                   border-color: var(--scarlet-bright); }
+  /* ── startup splash ── */
+  #splash {
+    position: fixed; inset: 0; z-index: 1000; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.6s ease;
+  }
+  #splash img { width: min(58vh, 58vw); height: auto;
+                filter: drop-shadow(0 8px 30px rgba(43,58,82,0.18)); }
+  #splash.hide { opacity: 0; pointer-events: none; }
 </style>
 </head>
 <body>
+<div id="splash"><img src="/static/Foundations_Trading.png" alt="Foundations Trading"></div>
 
 <div id="topbar">
+  <img id="topLogo" src="/static/Foundations_Trading.png" alt="">
   <h1>FOUNDATIONS</h1>
   <div class="tab active" id="tabDash" onclick="showTab('dash')">Dashboard</div>
   <div class="tab" id="tabLogs" onclick="showTab('logs')">Trade Logs</div>
@@ -928,6 +941,8 @@ async function refreshLogs() {
 /* ── boot ── */
 function refreshAll() { refreshHealth(); refreshPositions(); }
 wireChartInteraction();
+setTimeout(function(){ var sp=document.getElementById('splash');
+  if(sp){ sp.classList.add('hide'); setTimeout(function(){ if(sp&&sp.parentNode) sp.parentNode.removeChild(sp); }, 700); } }, 5000);
 refreshAll();
 setInterval(refreshHealth, 5000);
 setInterval(refreshPositions, 10000);
