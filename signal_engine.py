@@ -41,14 +41,14 @@ EMA_REGIME_A = 34
 EMA_REGIME_B = 50
 
 WARMUP_BARS = 250            # min closed 10-min bars before any signal
-ENTRY_START = dtime(10, 0)   # no entries before 10:00 ET (first-30-min pause)
+ENTRY_START = dtime(9, 30)   # EXPERIMENT: pause OFF, entries from the open (was 10:00)
 
 # Volume gate (Ripster): a stock that trades a big share of its average daily
 # volume in the first 30 minutes is having a trend day. We pause entries until
 # 10:00 anyway, so by gate-open the opening 30 min (9:30-10:00) is complete and
 # measurable. ADV is approximated from the prior days present in the 10-min
 # history already in hand (no extra data feed needed).
-REQUIRE_VOLUME = True        # require the first-30-min volume gate
+REQUIRE_VOLUME = False       # EXPERIMENT: first-30-min volume gate OFF (was True)
 OPEN_VOL_MIN_FRAC = 0.20     # first-30-min vol must be >= 20% of avg daily vol
 OPEN_WINDOW_END = dtime(10, 0)   # first-30-min window is 9:30 -> 10:00 ET
 
@@ -118,12 +118,18 @@ def trend_context(df10):
         trig = 'fresh_short'
     else:
         trig = 'none'
+
+    def _vs(price, lo, hi):
+        return 'above' if price > hi else ('below' if price < lo else 'inside')
+    price_vs_512 = _vs(cur, f_bot, f_top)
+    price_vs_3450 = _vs(cur, r_bot, r_top)
     result = f'{trend}/{trig}'
 
     return {
         'trend': trend, 'fresh_long': fresh_long, 'fresh_short': fresh_short,
         'long_exit': long_exit, 'short_exit': short_exit,
         'result': result, 'tally': {},   # tally kept empty for log compatibility
+        'price_vs_5_12': price_vs_512, 'price_vs_34_50': price_vs_3450,
         'emas': {'e5': round(e5, 4), 'e12': round(e12, 4),
                  'e34': round(e34, 4), 'e50': round(e50, 4)},
         'closes': {'cur': round(cur, 4), 'prev': round(prev, 4)},
