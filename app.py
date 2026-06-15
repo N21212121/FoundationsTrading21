@@ -96,6 +96,30 @@ _no_rebuy = _load_no_rebuy()    # {ticker: {'shares': day, 'options': day}}
 _last_bar_seen = {}              # {ticker: iso time of last evaluated bar}
 _status_message = 'started'
 
+# Day-start cash snapshot: position budgets are pinned to the cash available at
+# the first evaluation of each trading day, so every position gets the SAME
+# dollar size regardless of how much cash has already been deployed. Resets on a
+# new ET date.
+_daycash = {'date': None, 'cash': 0.0}
+
+
+def _session_cash():
+    """Cash available pinned to the start of today's session. Captured once per
+    ET date from the broker; reused all day so budgets don't shrink as cash is
+    consumed."""
+    today = datetime.now(ET).date().isoformat()
+    if _daycash['date'] != today:
+        try:
+            acct = alpaca.get_account()
+            # Prefer cash; fall back to equity if cash isn't present.
+            _daycash['cash'] = float(acct.get('cash', acct.get('equity', 0)) or 0)
+            _daycash['date'] = today
+            cm.log_forensic('conn_event', event='day_cash_snapshot',
+                            status='set', detail=f"{_daycash['cash']:.2f}")
+        except Exception:
+            pass
+    return _daycash['cash']
+
 
 def _positions():
     return cm.load_positions()
@@ -108,12 +132,13 @@ def _save_positions(p):
 # ─── ENTRY / EXIT ACTIONS ──────────────────────────────────────────────────────
 
 def _budget_for(ticker, cfg):
-    """allocation_pct of current equity, in dollars."""
+    """allocation_pct of the day's STARTING cash, in dollars. Pinned per session
+    so every position is sized the same regardless of cash already deployed."""
     for w in cfg.get('watchlist', []):
         if w['ticker'].upper() == ticker.upper():
             try:
-                acct = alpaca.get_account()
-                return acct['equity'] * float(w.get('allocation_pct', 0)) / 100.0
+                base = _session_cash()
+                return base * float(w.get('allocation_pct', 0)) / 100.0
             except Exception:
                 return 0.0
     return 0.0
@@ -684,6 +709,30 @@ def watchlist():
                 if w['ticker'] == ticker:
                     w['mode'] = 'pause' if w.get('mode', 'pause') == 'run' \
                                 else 'run'
+        elif action == 'bulk_add':
+            # Paste-a-list import. Each new ticker enters at the given default
+            # allocation (1% of equity by default -> ~$800 on an $80k account)
+            # and in PAUSE mode (signals logged, no live trades) so a big basket
+            # generates data without opening dozens of positions.
+            raw = body.get('tickers', '')
+            alloc = float(body.get('allocation_pct', 1.0))
+            # Accept commas, whitespace, or newlines as separators.
+            import re as _re
+            syms = [s.upper() for s in _re.split(r'[,\s]+', raw) if s.strip()]
+            existing = {w['ticker'] for w in cfg['watchlist']}
+            added, skipped = [], []
+            for s in syms:
+                if s in existing:
+                    skipped.append(s)
+                    continue
+                cfg['watchlist'].append({'ticker': s,
+                                         'allocation_pct': alloc,
+                                         'mode': 'pause'})
+                existing.add(s)
+                added.append(s)
+            cm.save_config(cfg)
+            return jsonify({'added': added, 'skipped': skipped,
+                            'watchlist': cfg.get('watchlist', [])})
         cm.save_config(cfg)
     return jsonify(cfg.get('watchlist', []))
 
@@ -951,10 +1000,10 @@ def dashboard():
         if opt_contracts == 0:
             opt_contracts = int(p.get('option_contracts') or 0)
 
-        # Set $: the engine's per-entry budget for this ticker, stable and
-        # independent of current deployment = allocation_pct x equity.
-        set_dollars = (alloc_by_ticker.get(t, 0) / 100.0 * equity) \
-            if equity else 0.0
+        # Set $: the engine's per-entry budget for this ticker = allocation_pct
+        # x the day's STARTING cash (pinned), matching _budget_for exactly so the
+        # displayed Set equals the actual budget and doesn't drift intraday.
+        set_dollars = round(alloc_by_ticker.get(t, 0) / 100.0 * _session_cash(), 2)
 
         # P/L %: return on the whole position's cost basis (shares + options
         # combined). Updates correctly as sleeves close because both value
