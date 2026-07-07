@@ -48,7 +48,7 @@ ENTRY_START = dtime(9, 30)   # EXPERIMENT: pause OFF, entries from the open (was
 # 10:00 anyway, so by gate-open the opening 30 min (9:30-10:00) is complete and
 # measurable. ADV is approximated from the prior days present in the 10-min
 # history already in hand (no extra data feed needed).
-REQUIRE_VOLUME = False       # EXPERIMENT: first-30-min volume gate OFF (was True)
+REQUIRE_VOLUME = True        # volume gates OPTIONS only (see evaluate/volume_ok)
 OPEN_VOL_MIN_FRAC = 0.20     # first-30-min vol must be >= 20% of avg daily vol
 OPEN_WINDOW_END = dtime(10, 0)   # first-30-min window is 9:30 -> 10:00 ET
 
@@ -154,13 +154,25 @@ def launch_gate(df10, now_et=None):
 
     if df10 is None or len(df10) < WARMUP_BARS:
         n = 0 if df10 is None else len(df10)
-        return {'passed': False, 'reason': f'warming up: {n}/{WARMUP_BARS} bars'}
+        return {'passed': False, 'volume_ok': False,
+                'reason': f'warming up: {n}/{WARMUP_BARS} bars'}
 
+    # Warmup + pause passed -> entries are allowed. Volume no longer blocks the
+    # entry; it only decides whether OPTIONS may be traded automatically. When
+    # volume is below threshold, volume_ok=False and the caller restricts an
+    # engine entry to SHARES (longs). Shorts (puts-only) then can't trade.
+    vol = _volume_ok(df10, now_et)
+    return {'passed': True, 'volume_ok': vol['ok'],
+            'reason': 'gate open; ' + vol['reason'],
+            'open_vol_frac': vol.get('frac')}
+
+
+def _volume_ok(df10, now_et):
+    """First-30-min volume vs ADV. Returns {'ok': bool, 'reason': str,
+    'frac': float|None}. If REQUIRE_VOLUME is off, always ok. Fails to
+    ok=False (options blocked) when data is thin, never raises."""
     if not REQUIRE_VOLUME:
-        return {'passed': True, 'reason': 'gate open (pause+warmup; vol off)'}
-
-    # First-30-min volume gate: today's 9:30-10:00 volume must be >= 20% of the
-    # stock's average daily volume, approximated from prior full days in hand.
+        return {'ok': True, 'reason': 'vol gate off'}
     today = now_et.date()
     open_t, win_end = dtime(9, 30), OPEN_WINDOW_END
 
@@ -175,25 +187,23 @@ def launch_gate(df10, now_et=None):
     sessions = sorted({t.date() for t in df10['time']})
     prior = [d for d in sessions if d < today]
     if not prior:
-        return {'passed': False,
-                'reason': 'volume: no prior sessions for ADV (fail closed)'}
+        return {'ok': False, 'reason': 'vol: no prior ADV (options blocked)',
+                'frac': None}
     day_vols = [v for v in (_dayvol(d) for d in prior) if v > 0]
     if not day_vols:
-        return {'passed': False,
-                'reason': 'volume: no prior-day volume for ADV (fail closed)'}
+        return {'ok': False, 'reason': 'vol: no prior-day vol (options blocked)',
+                'frac': None}
     adv = sum(day_vols) / len(day_vols)
-
     open_vol = _first30(today)
     frac = open_vol / adv if adv > 0 else 0.0
     if frac < OPEN_VOL_MIN_FRAC:
-        return {'passed': False,
-                'reason': f'first-30-min vol {frac:.0%} of ADV < '
-                          f'{OPEN_VOL_MIN_FRAC:.0%} '
-                          f'(open {open_vol:,.0f} vs ADV {adv:,.0f})',
-                'open_vol_frac': round(frac, 3)}
-    return {'passed': True,
-            'reason': f'all gates passed (first-30 vol {frac:.0%} of ADV)',
-            'open_vol_frac': round(frac, 3)}
+        return {'ok': False,
+                'reason': f'first-30 vol {frac:.0%} of ADV < '
+                          f'{OPEN_VOL_MIN_FRAC:.0%} (options blocked, shares ok)',
+                'frac': round(frac, 3)}
+    return {'ok': True,
+            'reason': f'first-30 vol {frac:.0%} of ADV (options allowed)',
+            'frac': round(frac, 3)}
 
 
 # --- OPTIONAL 1-HOUR CONFIRMATION --------------------------------------------
@@ -238,7 +248,8 @@ def evaluate(ticker, bars10, bars1h, current_open,
     df1h = bars_to_df(bars1h)
 
     decision = {'ticker': ticker, 'action': 'NONE', 'gate': None,
-                'step2': None, 'step3': None, 'flip': None, 'exit_kind': None}
+                'step2': None, 'step3': None, 'flip': None, 'exit_kind': None,
+                'volume_ok': True}
 
     if df10 is None or len(df10) < WARMUP_BARS:
         n = 0 if df10 is None else len(df10)
@@ -251,6 +262,7 @@ def evaluate(ticker, bars10, bars1h, current_open,
 
     gate = launch_gate(df10, now_et=now_et)
     decision['gate'] = gate
+    decision['volume_ok'] = gate.get('volume_ok', True)
 
     held = open_position_direction
 

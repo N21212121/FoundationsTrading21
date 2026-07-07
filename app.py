@@ -144,7 +144,7 @@ def _budget_for(ticker, cfg):
     return 0.0
 
 
-def _do_entry(ticker, direction, cfg, source='engine'):
+def _do_entry(ticker, direction, cfg, source='engine', allow_options=True):
     """Plan and execute an entry. Returns a result dict for logging."""
     # ── ONE POSITION PER TICKER (engine only) ──
     # The engine must never add to a ticker it already holds. Signals
@@ -204,10 +204,27 @@ def _do_entry(ticker, direction, cfg, source='engine'):
         return {'ok': False, 'reason': 'no quote'}
     spot = q['mid']
 
-    chain = alpaca.get_options_chain(ticker, spot,
-                                     strike_range_pct=tr.STRIKE_RANGE_PCT,
-                                     dte_min=tr.DTE_MIN, dte_max=tr.DTE_MAX)
-    plan = tr.plan_entry(direction, budget, spot, chain)
+    if allow_options:
+        chain = alpaca.get_options_chain(ticker, spot,
+                                         strike_range_pct=tr.STRIKE_RANGE_PCT,
+                                         dte_min=tr.DTE_MIN, dte_max=tr.DTE_MAX)
+        plan = tr.plan_entry(direction, budget, spot, chain)
+    else:
+        # Volume below threshold: options blocked for automatic entry.
+        # A long takes the full budget in SHARES; a short (puts-only) can't
+        # trade, since shares are long-only.
+        if direction != 'long':
+            return {'ok': False,
+                    'reason': 'volume below threshold: options blocked, '
+                              'short needs options (no share fallback)'}
+        qty = int(budget // spot) if spot > 0 else 0
+        if qty < 1:
+            return {'ok': False,
+                    'reason': 'volume below threshold: options blocked, '
+                              'budget below one share'}
+        plan = {'legs': [{'kind': 'shares', 'side': 'buy', 'qty': qty,
+                          'est_price': spot}],
+                'reason': f'shares-only ({qty} sh); options blocked by volume'}
     if not plan['legs']:
         return {'ok': False, 'reason': plan['reason']}
 
@@ -611,9 +628,9 @@ def _evaluate_ticker(ticker, cfg, pos):
         return   # paused: evaluated and logged above, but no new entries
 
     if a.endswith('ENTER_LONG'):
-        _do_entry(ticker, 'long', cfg)
+        _do_entry(ticker, 'long', cfg, allow_options=d.get('volume_ok', True))
     elif a.endswith('ENTER_SHORT'):
-        _do_entry(ticker, 'short', cfg)
+        _do_entry(ticker, 'short', cfg, allow_options=d.get('volume_ok', True))
 
 
 # ─── 10-SECOND MONITOR ─────────────────────────────────────────────────────────
@@ -709,6 +726,17 @@ def watchlist():
                 if w['ticker'] == ticker:
                     w['mode'] = 'pause' if w.get('mode', 'pause') == 'run' \
                                 else 'run'
+        elif action == 'set_all_mode':
+            # Master switch: flip EVERY watchlist ticker to 'run' or 'pause' at
+            # once. Controls only whether the engine may trade each name; does
+            # NOT touch open positions.
+            want = body.get('mode', 'pause')
+            want = 'run' if want == 'run' else 'pause'
+            for w in cfg['watchlist']:
+                w['mode'] = want
+            cm.save_config(cfg)
+            return jsonify({'mode': want, 'count': len(cfg['watchlist']),
+                            'watchlist': cfg.get('watchlist', [])})
         elif action == 'bulk_add':
             # Paste-a-list import. Each new ticker enters at the given default
             # allocation (1% of equity by default -> ~$800 on an $80k account)
