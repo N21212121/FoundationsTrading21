@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Foundations Trading runtime state
+# All runtime data lives in %LOCALAPPDATA%\FoundationsTrading\
+# so it's already outside the repo, but be explicit:
+config.json
+positions.json
+*.log
+*.csv
+
+# Secrets — belt and suspenders
+.env
+*.key
+*_secret*
+alpaca_keys.json
+
+# Build artifacts
+build/
+dist/
+*.spec
