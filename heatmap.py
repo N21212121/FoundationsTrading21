@@ -5,9 +5,12 @@ A CONSUMER of the journal noun, via pairing.py. Computes the entry-grade
 by exit-grade grid, with optional layer filters.
 
 THE GRID
-  Rows are entry grade 0-4. Columns are exit grade 0-4 plus 'none' for an
-  entry that never got an exit. Each cell reports trade count, total P/L,
-  average P/L, win rate and median hold time.
+  Rows are entry grade 0-4. Columns are exit grade 0-4, then a segregated
+  'none' column for an entry that never got an exit -- still open, or an
+  option left to expire. Each cell reports trade count, total P/L, average
+  P/L, win rate and median hold time.
+
+  'none' is kept out of the graded margins on purpose; see build().
 
   There is no row for "exit with no entry" because it cannot happen: the
   pairing layer opens a position on whatever fill comes first, so every exit
@@ -34,7 +37,14 @@ import pairing
 
 
 GRADES = [0, 1, 2, 3, 4]
-EXIT_KEYS = [0, 1, 2, 3, 4, 'none']
+
+# A graded exit is a fill you closed AND scored. 'none' is not a sixth grade:
+# pairing gives it to a leg that never got an exit fill at all -- still open,
+# or an option that expired. Those are a different population and the two are
+# kept apart everywhere below.
+EXIT_GRADES = [0, 1, 2, 3, 4]
+NO_EXIT = 'none'
+EXIT_KEYS = EXIT_GRADES + [NO_EXIT]
 
 # Where a filter key is looked up. Prefixes pick a side; a bare key means
 # "entry side", because that is the common case.
@@ -132,11 +142,34 @@ def _cell(legs):
     }
 
 
+def _exit_key(leg):
+    x = leg.get('exit_grade')
+    return x if x in EXIT_KEYS else NO_EXIT
+
+
 def build(legs=None, filters=None, sparse_below=3, **narrow):
     """Compute the grid. Returns cells, margins and a summary.
 
     sparse_below marks any cell with fewer than this many legs, so the UI can
     render it as unreliable instead of as a finding.
+
+    WHY THE MARGINS ARE SPLIT
+      A no-exit leg is open or expired, not exited badly. Folding it into the
+      'all' margin answers a question nobody asked -- "how did this entry
+      grade do, counting the trades I never closed as losses" -- and it moves
+      the number a long way: six expired contracts drag an entry grade from
+      61% to 53%. So three margins ship, and the UI reads the graded one by
+      default:
+
+        row_margin          graded exits only. The honest entry-grade read.
+        row_margin_no_exit  the no-exit column, per entry grade.
+        row_margin_all      both together, the old behaviour, for anyone who
+                            wants the full population in one number.
+
+      Margins are computed over the legs that actually landed in the grid, so
+      a margin always equals the sum of its cells. The old ones were taken
+      over the unfiltered leg set and quietly included ungraded legs that no
+      cell showed.
     """
     if legs is None:
         legs = pairing.build_legs()
@@ -144,19 +177,18 @@ def build(legs=None, filters=None, sparse_below=3, **narrow):
 
     buckets = {(e, x): [] for e in GRADES for x in EXIT_KEYS}
     ungraded = 0
+    placed_legs = []
     for l in legs:
-        e, x = l.get('entry_grade'), l.get('exit_grade')
-        if e is None:
+        e = l.get('entry_grade')
+        if e is None or l.get('exit_grade') is None:
             ungraded += 1
             continue
-        if x is None:
-            ungraded += 1
-            continue
-        key = (e, x if x in EXIT_KEYS else 'none')
+        key = (e, _exit_key(l))
         if key not in buckets:
             ungraded += 1
             continue
         buckets[key].append(l)
+        placed_legs.append(l)
 
     cells = {}
     for (e, x), group in buckets.items():
@@ -165,13 +197,16 @@ def build(legs=None, filters=None, sparse_below=3, **narrow):
         c['entry_grade'], c['exit_grade'] = e, x
         cells[f'{e}|{x}'] = c
 
-    row_margin = {str(e): _cell([l for l in legs
-                                 if l.get('entry_grade') == e])
-                  for e in GRADES}
-    col_margin = {str(x): _cell([l for l in legs
-                                 if (l.get('exit_grade') if
-                                     l.get('exit_grade') in EXIT_KEYS
-                                     else 'none') == x])
+    graded = [l for l in placed_legs if _exit_key(l) != NO_EXIT]
+    no_exit = [l for l in placed_legs if _exit_key(l) == NO_EXIT]
+
+    def by_entry(pool, e):
+        return [l for l in pool if l.get('entry_grade') == e]
+
+    row_margin = {str(e): _cell(by_entry(graded, e)) for e in GRADES}
+    row_margin_no_exit = {str(e): _cell(by_entry(no_exit, e)) for e in GRADES}
+    row_margin_all = {str(e): _cell(by_entry(placed_legs, e)) for e in GRADES}
+    col_margin = {str(x): _cell([l for l in placed_legs if _exit_key(l) == x])
                   for x in EXIT_KEYS}
 
     placed = sum(c['n'] for c in cells.values())
@@ -180,14 +215,25 @@ def build(legs=None, filters=None, sparse_below=3, **narrow):
 
     return {
         'grades': GRADES,
+        'exit_grades': [str(k) for k in EXIT_GRADES],
         'exit_keys': [str(k) for k in EXIT_KEYS],
+        'no_exit_key': NO_EXIT,
         'cells': cells,
         'row_margin': row_margin,
+        'row_margin_no_exit': row_margin_no_exit,
+        'row_margin_all': row_margin_all,
         'col_margin': col_margin,
+        'grand': {
+            'graded': _cell(graded),
+            'no_exit': _cell(no_exit),
+            'all': _cell(placed_legs),
+        },
         'summary': {
             'legs_in_grid': placed,
             'legs_excluded_ungraded': ungraded,
             'overall': _cell(legs),
+            'overall_graded': _cell(graded),
+            'overall_no_exit': _cell(no_exit),
             'populated_cells': populated,
             'sparse_cells': sparse_cells,
             'sparse_below': sparse_below,
