@@ -370,7 +370,11 @@ def make_bp(alpaca):
         rather than silently rendering a stale board.
         """
         return jsonify({'ok': True, 'prices': SVC.live_prices(),
-                        'feed': SVC.feed_state()})
+                        'feed': SVC.feed_state(),
+                        # Passive: crossings seen since the last poll. These
+                        # are NOT alerts and must not pop anything. They are
+                        # here so the UI can mark a row that just moved.
+                        'standbys': SVC.drain_standbys()})
 
     @bp.route('/api/screen/standby/<ticker>')
     def screen_standby(ticker):

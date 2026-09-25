@@ -98,6 +98,13 @@ _alerts = deque(maxlen=200)
 # WHEN a ticker fired, so a separate bounded history is kept per ticker.
 _alert_history = {}
 _gate = SC.AlertGate(cooldown_minutes=30)
+# Level crossings seen by the price feed. Deliberately NOT _alerts: these are
+# passive, and the board reordering is how they are surfaced.
+_standbys = deque(maxlen=200)
+# Per-ticker state that the rerank has actually committed to, plus how many
+# consecutive passes have argued for demoting it. See _rerank_once.
+_effective = {}
+_demote_count = {}
 _lock = threading.Lock()
 def _load_weights():
     try:
@@ -180,18 +187,36 @@ def peek_alerts():
 
 
 def _emit_standby(rec):
-    """Receive one standby from the price feed and queue it like any alert.
+    """Receive one standby from the price feed. It does NOT become an alert.
 
-    Standbys share the queue so the UI has one thing to drain, and carry
-    kind='standby' so it can tell them apart. They deliberately do NOT go
-    through _gate: that gate tracks the scan's escalation ladder
-    (idle -> approaching -> at_level -> triggered) and a standby is not a
-    rung on it. The feed does its own per-level cooldown instead.
+    A crossing is not worth interrupting anyone for. All this layer knows is
+    that price moved through a line -- not whether the cloud agrees, and not
+    whether the bar closed through or merely wicked through, which is the
+    difference between a break and nothing at all. Firing a popup on that
+    would train the reader to dismiss popups, and then the scan's alerts,
+    which ARE bar-confirmed, stop working too.
+
+    So standbys go to their own bounded queue and the board reorders itself
+    on the rerank clock. The movement IS the notification. Anything that
+    genuinely escalated will be raised by the next scan, through AlertGate,
+    on a closed bar.
     """
     with _lock:
-        _alerts.append(rec)
-        hist = _alert_history.setdefault(rec['ticker'], deque(maxlen=40))
-        hist.append(rec)
+        _standbys.append(rec)
+
+
+def drain_standbys(limit=100):
+    """Recent crossings, for a passive indicator. Not alerts; nothing pops."""
+    out = []
+    with _lock:
+        while _standbys and len(out) < limit:
+            out.append(_standbys.popleft())
+    return out
+
+
+def peek_standbys():
+    with _lock:
+        return list(_standbys)
 
 
 def live_prices():
@@ -304,6 +329,102 @@ def alert_history(ticker, limit=40):
         return list(_alert_history.get(ticker.upper(), []))[-limit:]
 
 
+# ─── LIVE RERANK ───────────────────────────────────────────────────────────────
+
+# How often the board reorders. Prices tick every second; the ordering moves
+# every ten. A list that reshuffles under the cursor cannot be read, and the
+# reader is the point -- the whole reason the slot cap could be lifted is that
+# movement pulls the eye to a row instead of the reader sweeping all of them.
+RERANK_SECONDS = 10
+
+# Promote on the first pass, demote only after this many consecutive passes
+# argue for it. Without the asymmetry a ticker sitting exactly on NEAR_ATR
+# oscillates between at_level and approaching, and jumps up and down the board
+# every ten seconds, which is worse than not moving at all. Escalate fast,
+# decay slow -- the same asymmetry AlertGate already applies one layer up.
+DEMOTE_PASSES = 3
+
+_ORDER = {'triggered': 0, 'at_level': 1, 'approaching': 2, 'idle': 3}
+
+
+def _rerank_once():
+    """Reorder the stored board against live prices. No API calls, no bars.
+
+    Board AND bench are restated together and re-ranked as one list, because
+    the move that matters most is a benched ticker arriving at its level --
+    that is precisely the row that should appear without waiting for a scan.
+    """
+    prices = PF.spool().prices()
+    if not prices:
+        return None
+    with _lock:
+        result = _state.get('result')
+        ms = _settings['min_state']
+    if not result:
+        return None
+
+    rows = list(result.get('board') or []) + list(result.get('bench') or [])
+    if not rows:
+        return None
+
+    restated = []
+    for row in rows:
+        t = row.get('ticker')
+        live = prices.get(t, {}).get('price')
+        r = SC.live_restate(row, live) if live is not None else dict(row)
+
+        # Hysteresis, against the state we last committed to rather than
+        # against the scan, so a demotion has to survive DEMOTE_PASSES in a
+        # row rather than resetting every time the scan refreshes.
+        proposed = r.get('state', 'idle')
+        eff = _effective.get(t, proposed)
+        if _ORDER.get(proposed, 3) < _ORDER.get(eff, 3):
+            eff = proposed
+            _demote_count[t] = 0
+        elif _ORDER.get(proposed, 3) > _ORDER.get(eff, 3):
+            n = _demote_count.get(t, 0) + 1
+            if n >= DEMOTE_PASSES:
+                eff = proposed
+                n = 0
+            _demote_count[t] = n
+        else:
+            _demote_count[t] = 0
+        _effective[t] = eff
+        r['state'] = eff
+        r['proposed_state'] = proposed
+        restated.append(r)
+
+    board = SC.rank(restated, min_state=ms)
+    on_board = {id(r) for r in board}
+    bench = sorted([r for r in restated if id(r) not in on_board],
+                   key=lambda r: -r['score'])
+    stamp = datetime.now().isoformat(timespec='seconds')
+    with _lock:
+        cur = _state.get('result')
+        if cur is not None:
+            cur['board'] = board
+            cur['bench'] = bench
+            cur['reranked_at'] = stamp
+        _state['last_rerank'] = stamp
+        _state['reranks'] = _state.get('reranks', 0) + 1
+    return len(board)
+
+
+def rerank_loop():
+    """Daemon target. Never raises; a bad pass leaves the last order intact."""
+    while True:
+        try:
+            if PF.in_session():
+                _rerank_once()
+        except Exception as e:
+            try:
+                cm.log_forensic('api_event', event='screener_rerank',
+                                status='error', error=str(e))
+            except Exception:
+                pass
+        time.sleep(RERANK_SECONDS if PF.in_session() else 60)
+
+
 def loop(alpaca):
     """Daemon target. Never raises; a bad pass leaves the last board intact."""
     with _lock:
@@ -346,6 +467,11 @@ def start(alpaca):
     # loop() so that a scan pass failing, or the screener being disabled,
     # never takes the live prices down with it.
     PF.start(alpaca, _emit_standby)
+    # The rerank runs on its own clock too. It touches no API and no bars --
+    # it reorders what the last scan already produced against the prices the
+    # feed already holds -- so it is safe to run even while a scan is mid-pass.
+    threading.Thread(target=rerank_loop, daemon=True,
+                     name='screener_rerank').start()
     return t
 
 

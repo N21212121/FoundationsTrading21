@@ -64,10 +64,15 @@ import config_manager as cm
 
 ET = ZoneInfo('America/New_York')
 
-# Every five seconds. Fast enough that a level cross is news while it is still
-# happening, slow enough that the board is not redrawn under the reader's
-# cursor. Not a tunable: see the module docstring on what the cost is.
-TICK_SECONDS = 5
+# Every second. One batched request per tick, so this is 60 requests a minute
+# against a limiter sized at 9,000 -- under 1% of budget for the freshest
+# price the REST API can give.
+#
+# The board is NOT redrawn at this rate. Prices update every second; the
+# ordering settles on the slower clock in screener_service (RERANK_SECONDS),
+# because a list that reshuffles under the cursor is unreadable however
+# current it is.
+TICK_SECONDS = 1
 
 # The session the feed runs in. SIP carries 04:00-20:00 ET and the pre-market
 # extremes (PMH/PML) are levels the owner watches, so the feed starts when the

@@ -534,6 +534,67 @@ def scan(entries, bar_getter, min_state='approaching',
     }
 
 
+# ─── LIVE RESTATE ──────────────────────────────────────────────────────────────
+
+def live_restate(row, price):
+    """Recompute the part of a row that moves in seconds, and only that part.
+
+    A scan pass is a snapshot of several different clocks. The cloud reads,
+    the trigger, the alignment, the journal edge and the play grades all come
+    off closed bars and cannot change until another bar closes. Distance to a
+    level changes on every tick.
+
+    So this recomputes distance -- and which level is nearest, since a moving
+    price can change that -- and re-derives the state from it, while carrying
+    `fired` and `aligned` forward from the scan untouched. The result is a row
+    whose POSITION is live and whose READING is as old as the last scan. That
+    is a real limitation and the reason this returns 'live_price' and
+    'live_at' alongside: a row can be surfaced by a fresh distance while its
+    cloud read is fifty seconds stale, and the UI has to be able to say so.
+
+    Returns a new dict; the input row is not mutated.
+    """
+    atr = row.get('atr')
+    levels = row.get('near_levels') or []
+    if price is None or not atr or not levels:
+        return row
+
+    closest, best = None, None
+    for lv in levels:
+        lp = lv.get('price')
+        if lp is None:
+            continue
+        d = abs(price - lp) / atr
+        if best is None or d < best:
+            best, closest = d, dict(lv, distance=round(price - lp, 4),
+                                    distance_atr=round(d, 3))
+    if closest is None:
+        return row
+
+    # `aligned` and `fired` are bar-derived and are NOT re-judged here.
+    aligned = row.get('aligned')
+    fired = bool(row.get('raw', {}).get('trigger_fired'))
+    if fired:
+        state = 'triggered'
+    elif best <= NEAR_ATR and aligned:
+        state = 'at_level'
+    elif best <= APPROACH_ATR:
+        state = 'approaching'
+    else:
+        state = 'idle'
+
+    out = dict(row)
+    out['state'] = state
+    out['closest'] = closest
+    out['live_price'] = price
+    out['scan_price'] = row.get('price')
+    out['scan_state'] = row.get('state')
+    # Proximity is the only score component distance drives. Recomputing the
+    # whole score would be a lie: six of the seven inputs have not moved.
+    out['live_proximity'] = _clamp(1.0 - best / APPROACH_ATR)
+    return out
+
+
 # ─── ALERT DEDUPE ──────────────────────────────────────────────────────────────
 
 class AlertGate:
