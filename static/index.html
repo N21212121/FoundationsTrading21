@@ -3027,20 +3027,27 @@ function scrRow(x, dim) {
       <div style="display:flex;align-items:baseline;gap:4px;">
         <span class="scrTick">${x.ticker}</span>${dirPill}${gate}${shelf}
         ${x.catalyst?'<span class="scrPill">cat</span>':''}
-        <span style="margin-left:auto;font-size:11px;color:var(--text-dim);">
+        <span style="margin-left:auto;display:flex;align-items:baseline;gap:7px;
+              font-size:11px;color:var(--text-dim);">
           ${x.best_play
-            ? `<b style="color:${x.play_live?'var(--navy)':'var(--text-dim)'};font-size:15px;">${
-                x.best_play.grade.toFixed(1)}</b> · `
-            : (x.score!=null?`<b style="color:var(--text);">${(x.score*100).toFixed(0)}</b> · `:'')}
+            ? `<b style="color:${x.play_live?'var(--navy)':'var(--text-dim)'};
+                 font-size:19px;line-height:1;">${x.best_play.grade.toFixed(1)}</b>`
+            : (x.score!=null
+              ? `<b style="color:var(--text);font-size:19px;line-height:1;
+                   font-variant-numeric:tabular-nums;"
+                   title="weighted score out of 100">${(x.score*100).toFixed(0)}</b>`
+              : '')}
           <span data-state="${x.ticker}">${x.state.replace('_',' ')}</span>${
             x.price!=null
-              ? ` · <span data-live="${x.ticker}" title="scan price ${moneyFull(x.price)}"
-                    >${moneyFull(x.live_price!=null?x.live_price:x.price)}</span>`
+              ? `<span data-live="${x.ticker}" title="scan price ${moneyFull(x.price)}"
+                   style="font-size:16px;font-weight:600;color:var(--text);"
+                   >${moneyFull(x.live_price!=null?x.live_price:x.price)}</span>`
               : ''}</span>
       </div>
       ${dist?`<div style="font-size:12px;margin-top:3px;">${dist}</div>`:''}
-      ${x.trigger && x.trigger!=='none'?`<div style="font-size:11.5px;
-         color:var(--scarlet);margin-top:2px;">${x.trigger}</div>`:''}
+      ${x.trigger && x.trigger!=='none'?`<div style="font-size:14px;
+         font-weight:600;letter-spacing:.2px;
+         color:var(--scarlet);margin-top:3px;">${x.trigger}</div>`:''}
       ${bits.length?`<div style="font-size:11px;color:var(--text-dim);
          margin-top:2px;">${bits.join(' · ')}</div>`:''}
       ${scrPlayBlock(x)}
@@ -3110,11 +3117,41 @@ function scrScoreBar(x) {
   if (!c) return '';
   const total = Object.values(c).reduce((a,b)=>a+b,0) || 1;
   const segs = Object.keys(c).filter(k => c[k] > 0.001).map(k =>
-    `<div title="${SCR_COMP_LABEL[k]}: ${(c[k]*100).toFixed(1)} of ${(total*100).toFixed(0)}"
-       style="width:${(c[k]/total*100).toFixed(1)}%;background:${SCR_COMP_COLOR[k]};
+    `<div style="width:${(c[k]/total*100).toFixed(1)}%;background:${SCR_COMP_COLOR[k]};
        height:100%;"></div>`).join('');
+
+  // The legend. The bar alone shows PROPORTION -- which component is loudest
+  // -- but not whether a component is loud because it scored well or merely
+  // because it carries weight. So each row prints earned/possible: the points
+  // this component put into the score, against the most its weight allows.
+  // 20/22 and 2/22 look identical on the bar and mean opposite things.
+  //
+  // Sorted by contribution, because the first line answering "why is this
+  // ticker here" is worth more than a stable column order.
+  const w = x.weights || {};
+  const rows = Object.keys(c)
+    .sort((a,b) => c[b] - c[a])
+    .map(k => {
+      const got = c[k] * 100;
+      const max = (w[k] || 0) * 100;
+      const spent = max > 0 ? got / max : 0;
+      return `<div style="display:flex;align-items:center;gap:5px;min-width:0;">
+          <span style="width:7px;height:7px;border-radius:2px;flex:none;
+                background:${SCR_COMP_COLOR[k]};opacity:${got > 0.05 ? 1 : .25};"></span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                color:var(--text-dim);">${SCR_COMP_LABEL[k]}</span>
+          <span style="margin-left:auto;flex:none;font-variant-numeric:tabular-nums;
+                color:${spent >= 0.75 ? 'var(--text)' : 'var(--text-dim)'};
+                font-weight:${spent >= 0.75 ? 600 : 400};"
+                >${got.toFixed(0)}<span style="color:var(--text-dim);font-weight:400;"
+                >/${max.toFixed(0)}</span></span>
+        </div>`;
+    }).join('');
+
   return `<div style="display:flex;height:5px;border-radius:3px;overflow:hidden;
-       margin-top:5px;background:var(--card-2);">${segs}</div>`;
+       margin-top:6px;background:var(--card-2);">${segs}</div>
+     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1px 14px;
+          font-size:11px;margin-top:5px;">${rows}</div>`;
 }
 
 const SCR_COMP_HELP = {
@@ -3530,8 +3567,14 @@ async function scrPollPrices() {
     const next = moneyFull(px);
     if (shown !== next) {
       el.textContent = next;
-      el.style.color = px > prices[t].prev ? 'var(--green)'
-                     : (px < prices[t].prev ? 'var(--red)' : '');
+      // Never clear to '': the element carries its resting colour inline, and
+      // clearing would strip that too and let it inherit the dim parent.
+      // prev is null on the very first tick, and `px > null` coerces to
+      // `px > 0`, so guard it or every row flashes green on arrival.
+      const prev = prices[t].prev;
+      el.style.color = prev == null ? 'var(--text)'
+                     : (px > prev ? 'var(--green)'
+                     : (px < prev ? 'var(--red)' : 'var(--text)'));
     }
   });
 
