@@ -22,6 +22,11 @@
        accent role, 5.35:1 at worst against every background in use,
        including the tinted screener cards. Fills stay yellow. */
     --royal: #3457C5;
+    /* The triggered edge. Warm, so it advances against a palette that is
+       otherwise cool, and deliberately NOT red: red now means SHORT in a
+       card's background, and a red edge on a green card would argue with
+       itself. 4.39:1 at worst, against the 3:1 UI-component threshold. */
+    --trigger-edge: #B4530A;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -70,7 +75,11 @@
     border:1px solid var(--border); border-left-width:4px; border-radius:7px;
     padding:9px 11px; margin-bottom:8px; background:var(--card);
   }
-  .scrCard.triggered  { border-left-color: var(--scarlet); }
+  /* The urgency ladder, coolest and quietest to warmest and loudest:
+     grey -> navy -> burnt orange. It runs on its own axis from the
+     background tint, which carries direction, so a card says which way it
+     leans and how close it is without the two signals interfering. */
+  .scrCard.triggered  { border-left-color: var(--trigger-edge); }
   .scrCard.at_level   { border-left-color: var(--navy); }
   .scrCard.approaching{ border-left-color: var(--border); }
 
@@ -106,8 +115,8 @@
      with the direction tint underneath it. */
   .scrCard { transition: background-color .5s ease, box-shadow .5s ease; }
   .scrCard.scrCrossed {
-    box-shadow: inset 3px 0 0 0 var(--gold, #C8A55B),
-                0 0 0 2px rgba(200,165,91,.35);
+    box-shadow: inset 3px 0 0 0 var(--royal),
+                0 0 0 2px rgba(52,87,197,.28);
   }
   /* Live price ticks colour briefly, then settle. */
   [data-live] { transition: color .8s ease; font-variant-numeric: tabular-nums; }
