@@ -16,7 +16,10 @@ The Ripster EMA Cloud system, faithfully. Four rules, in strict priority:
        - price closes through the 34/50 cloud (you were wrong = structural stop)
      Either one closes the position.
 
-  4. GATE (optional): 30-min opening pause. RVOL and 1-hour confirmation are
+  4. GATE: entries allowed from ENTRY_START. Volume gates OPTIONS only, as
+     a PACE test: volume so far in the 9:30-10:00 window must be on pace
+     for OPEN_VOL_MIN_FRAC of ADV by 10:00 (prorated by elapsed time, so it
+     works while the window is still filling). 1-hour confirmation is
      available but OFF by default, to measure the core strategy cleanly.
 
 Pure logic. Bars in, decision out. No broker calls, no I/O, no threads.
@@ -44,10 +47,16 @@ WARMUP_BARS = 250            # min closed 10-min bars before any signal
 ENTRY_START = dtime(9, 30)   # EXPERIMENT: pause OFF, entries from the open (was 10:00)
 
 # Volume gate (Ripster): a stock that trades a big share of its average daily
-# volume in the first 30 minutes is having a trend day. We pause entries until
-# 10:00 anyway, so by gate-open the opening 30 min (9:30-10:00) is complete and
-# measurable. ADV is approximated from the prior days present in the 10-min
-# history already in hand (no extra data feed needed).
+# volume in the first 30 minutes is having a trend day. The original rule
+# compared the COMPLETED 9:30-10:00 volume to the threshold, which was sound
+# only while entries were paused until 10:00. With ENTRY_START at 9:30 the
+# window is still filling when entries go live, so the raw ratio read low by
+# construction and blocked options in exactly the opening-drive window this
+# strategy targets. The rule is therefore a PACE test now: volume so far in
+# the window must be >= OPEN_VOL_MIN_FRAC * ADV * (elapsed / 30 min). From
+# 10:00 onward that is arithmetically identical to the original rule. ADV is
+# approximated from the prior days present in the 10-min history already in
+# hand (no extra data feed needed).
 REQUIRE_VOLUME = True        # volume gates OPTIONS only (see evaluate/volume_ok)
 OPEN_VOL_MIN_FRAC = 0.20     # first-30-min vol must be >= 20% of avg daily vol
 OPEN_WINDOW_END = dtime(10, 0)   # first-30-min window is 9:30 -> 10:00 ET
@@ -148,8 +157,9 @@ def launch_gate(df10, now_et=None):
     now_et = now_et or datetime.now(ET)
 
     if now_et.time() < ENTRY_START:
-        return {'passed': False,
-                'reason': f'opening pause: no entries before 10:00 ET '
+        return {'passed': False, 'volume_ok': False,
+                'reason': f'opening pause: no entries before '
+                          f'{ENTRY_START.strftime("%H:%M")} ET '
                           f'(now {now_et.strftime("%H:%M:%S")})'}
 
     if df10 is None or len(df10) < WARMUP_BARS:
@@ -168,13 +178,29 @@ def launch_gate(df10, now_et=None):
 
 
 def _volume_ok(df10, now_et):
-    """First-30-min volume vs ADV. Returns {'ok': bool, 'reason': str,
-    'frac': float|None}. If REQUIRE_VOLUME is off, always ok. Fails to
-    ok=False (options blocked) when data is thin, never raises."""
+    """Opening-volume PACE vs ADV, prorated over the 9:30->10:00 window.
+
+    required = OPEN_VOL_MIN_FRAC * min(elapsed, 30) / 30. Before 10:00 the
+    numerator only contains the closed bars so far, so the threshold scales
+    with it; from 10:00 onward this is arithmetically the original rule.
+    Returns {'ok': bool, 'reason': str, 'frac': float|None} where frac is
+    the raw window-volume / ADV so far. If REQUIRE_VOLUME is off, always
+    ok. Fails to ok=False (options blocked) when data is thin, never
+    raises."""
     if not REQUIRE_VOLUME:
         return {'ok': True, 'reason': 'vol gate off'}
     today = now_et.date()
     open_t, win_end = dtime(9, 30), OPEN_WINDOW_END
+
+    open_dt = datetime.combine(today, open_t, tzinfo=now_et.tzinfo or ET)
+    end_dt = datetime.combine(today, win_end, tzinfo=now_et.tzinfo or ET)
+    win_min = (end_dt - open_dt).total_seconds() / 60.0
+    elapsed = (min(now_et, end_dt) - open_dt).total_seconds() / 60.0
+    if elapsed <= 0 or win_min <= 0:
+        return {'ok': False,
+                'reason': 'vol: opening window not started (options blocked)',
+                'frac': None}
+    required = OPEN_VOL_MIN_FRAC * min(1.0, elapsed / win_min)
 
     def _first30(d):
         m = ((df10['time'].dt.date == d) & (df10['time'].dt.time >= open_t)
@@ -196,13 +222,16 @@ def _volume_ok(df10, now_et):
     adv = sum(day_vols) / len(day_vols)
     open_vol = _first30(today)
     frac = open_vol / adv if adv > 0 else 0.0
-    if frac < OPEN_VOL_MIN_FRAC:
+    if frac < required:
         return {'ok': False,
-                'reason': f'first-30 vol {frac:.0%} of ADV < '
-                          f'{OPEN_VOL_MIN_FRAC:.0%} (options blocked, shares ok)',
+                'reason': f'open vol {frac:.0%} of ADV < {required:.0%} '
+                          f'required ({elapsed:.0f}/{win_min:.0f} min pace '
+                          f'of {OPEN_VOL_MIN_FRAC:.0%}) '
+                          f'(options blocked, shares ok)',
                 'frac': round(frac, 3)}
     return {'ok': True,
-            'reason': f'first-30 vol {frac:.0%} of ADV (options allowed)',
+            'reason': f'open vol {frac:.0%} of ADV >= {required:.0%} '
+                      f'pace (options allowed)',
             'frac': round(frac, 3)}
 
 

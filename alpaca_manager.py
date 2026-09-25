@@ -21,7 +21,7 @@ Does NOT own:
 
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config_manager import log_forensic
 
@@ -66,6 +66,7 @@ class AlpacaManager:
         self._option_data = None   # OptionHistoricalDataClient
         self.connected = False
         self.paper = True
+        self._key = self._secret = None
         self.limiter = RateLimiter()
         self._lock = threading.RLock()
 
@@ -87,6 +88,7 @@ class AlpacaManager:
         try:
             with self._lock:
                 self._trading = TradingClient(key, secret, paper=paper)
+                self._key, self._secret = key, secret
                 self._stock_data = StockHistoricalDataClient(key, secret)
                 self._option_data = OptionHistoricalDataClient(key, secret)
                 # Prove the credentials work with one cheap call.
@@ -108,6 +110,7 @@ class AlpacaManager:
             self._trading = None
             self._stock_data = None
             self._option_data = None
+            self._key = self._secret = None
             self.connected = False
         log_forensic('conn_event', event='disconnect', status='ok')
 
@@ -155,7 +158,9 @@ class AlpacaManager:
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
         m = {
             '1Min':  TimeFrame(1, TimeFrameUnit.Minute),
+            '2Min':  TimeFrame(2, TimeFrameUnit.Minute),
             '5Min':  TimeFrame(5, TimeFrameUnit.Minute),
+            '6Min':  TimeFrame(6, TimeFrameUnit.Minute),
             '10Min': TimeFrame(10, TimeFrameUnit.Minute),
             '15Min': TimeFrame(15, TimeFrameUnit.Minute),
             '30Min': TimeFrame(30, TimeFrameUnit.Minute),
@@ -166,9 +171,19 @@ class AlpacaManager:
             '1Week': TimeFrame(1, TimeFrameUnit.Week),
             '1Month': TimeFrame(1, TimeFrameUnit.Month),
         }
-        if tf_str not in m:
-            raise ValueError(f'Unsupported timeframe: {tf_str}')
-        return m[tf_str]
+        if tf_str in m:
+            return m[tf_str]
+        # Fall through to a parsed TimeFrame so an unlisted-but-valid
+        # timeframe ('3Min', '45Min') works instead of raising.
+        import re as _re
+        hit = _re.match(r'^(\d+)(Min|Hour|Day|Week|Month)$', str(tf_str).strip(),
+                        _re.I)
+        if hit:
+            unit = {'min': TimeFrameUnit.Minute, 'hour': TimeFrameUnit.Hour,
+                    'day': TimeFrameUnit.Day, 'week': TimeFrameUnit.Week,
+                    'month': TimeFrameUnit.Month}[hit.group(2).lower()]
+            return TimeFrame(int(hit.group(1)), unit)
+        raise ValueError(f'Unsupported timeframe: {tf_str}')
 
     def get_bars(self, ticker, timeframe='10Min', limit=500):
         """Returns a list of dicts, oldest first:
@@ -177,10 +192,8 @@ class AlpacaManager:
         from alpaca.data.requests import StockBarsRequest
 
         # Lookback window generous enough to cover `limit` bars incl. weekends.
-        minutes_per_bar = {'1Min': 1, '5Min': 5, '10Min': 10, '15Min': 15,
-                           '30Min': 30, '1Hour': 60, '2Hour': 120,
-                           '4Hour': 240, '1Day': 1440, '1Week': 10080,
-                           '1Month': 43200}[timeframe]
+        import halflife as _hlf
+        minutes_per_bar = _hlf.tf_minutes(timeframe, default=10)
         # Market hours ≈ 390 min/day; pad x3 for weekends/holidays.
         days_back = max(2, int(limit * minutes_per_bar / 390 * 3) + 2)
         start = datetime.now() - timedelta(days=days_back)
@@ -207,6 +220,121 @@ class AlpacaManager:
         log_forensic('api_event', event='get_bars', ticker=ticker,
                      timeframe=timeframe, status='ok', n_bars=len(out),
                      latency_ms=int((time.monotonic() - t0) * 1000))
+        return out
+
+    # How many symbols to pack into one multi-symbol data request. Conservative:
+    # keeps URLs short and each response a sane size. 1,000 names = 5 requests.
+    MULTI_CHUNK = 200
+
+    def get_bars_multi(self, symbols, timeframe='10Min', limit=300, start=None,
+                       progress=None):
+        """Batched bars for many symbols. Returns {symbol: [bar dicts]},
+        each list oldest first, same dict shape as get_bars. Symbols with no
+        data are simply absent from the result.
+
+        One API request per MULTI_CHUNK symbols instead of one per symbol —
+        this is what makes 1,000-name sweeps fit the clock and the rate limit.
+        `start` overrides the lookback window (used by the incremental bar
+        cache to request only bars newer than what it holds).
+
+        `progress`, if given, is called progress(symbols_done, symbols_total)
+        after each chunk. A 1,000-name fetch is 5 chunks and can take a
+        minute; without this the UI sits blank through the slowest phase of
+        a screen."""
+        self._require()
+        from alpaca.data.requests import StockBarsRequest
+
+        symbols = [s.upper() for s in symbols]
+        if not symbols:
+            return {}
+
+        if start is None:
+            import halflife as _hlf
+            minutes_per_bar = _hlf.tf_minutes(timeframe, default=10)
+            days_back = max(2, int(limit * minutes_per_bar / 390 * 3) + 2)
+            start = datetime.now() - timedelta(days=days_back)
+
+        out = {}
+        t0 = time.monotonic()
+        n_chunks = (len(symbols) + self.MULTI_CHUNK - 1) // self.MULTI_CHUNK
+        for i in range(0, len(symbols), self.MULTI_CHUNK):
+            chunk = symbols[i:i + self.MULTI_CHUNK]
+            ci = i // self.MULTI_CHUNK + 1
+            self.limiter.wait()
+            c0 = time.monotonic()
+            # Announce BEFORE the call. A hung request is otherwise invisible:
+            # the UI shows a fetch phase at 0% and the console shows nothing,
+            # so there is no way to tell a slow API from a dead thread.
+            print(f'[BARS] {timeframe} chunk {ci}/{n_chunks} '
+                  f'({len(chunk)} symbols) start={start} ...', flush=True)
+            try:
+                req = StockBarsRequest(symbol_or_symbols=chunk,
+                                       timeframe=self._timeframe(timeframe),
+                                       start=start, limit=None, feed='sip')
+                resp = self._stock_data.get_stock_bars(req)
+            except Exception as e:
+                print(f'[BARS] {timeframe} chunk {ci}/{n_chunks} FAILED '
+                      f'after {time.monotonic() - c0:.1f}s: {e}', flush=True)
+                log_forensic('api_event', event='get_bars_multi',
+                             timeframe=timeframe, status='error',
+                             n_symbols=len(chunk), error=str(e))
+                # Advance progress even on failure. Otherwise a failing chunk
+                # freezes the bar at the previous count and looks like a hang.
+                if progress:
+                    progress(min(i + self.MULTI_CHUNK, len(symbols)),
+                             len(symbols))
+                continue
+            print(f'[BARS] {timeframe} chunk {ci}/{n_chunks} ok '
+                  f'({time.monotonic() - c0:.1f}s)', flush=True)
+            for sym in chunk:
+                bars = resp.data.get(sym, [])
+                if not bars:
+                    continue
+                rows = [{
+                    'time': b.timestamp.isoformat(),
+                    'open': float(b.open), 'high': float(b.high),
+                    'low': float(b.low), 'close': float(b.close),
+                    'volume': float(b.volume),
+                } for b in bars]
+                out[sym] = rows[-limit:]
+            if progress:
+                progress(min(i + self.MULTI_CHUNK, len(symbols)), len(symbols))
+        log_forensic('api_event', event='get_bars_multi', timeframe=timeframe,
+                     status='ok', n_symbols=len(out),
+                     latency_ms=int((time.monotonic() - t0) * 1000))
+        return out
+
+    def get_quotes_multi(self, symbols):
+        """Batched latest quotes. Returns {symbol: {'bid','ask','mid','time'}}.
+        Symbols with a bad/absent quote are omitted. Same chunking economics
+        as get_bars_multi: 1,000 names = 5 requests, not 1,000."""
+        self._require()
+        from alpaca.data.requests import StockLatestQuoteRequest
+        symbols = [s.upper() for s in symbols]
+        out = {}
+        for i in range(0, len(symbols), self.MULTI_CHUNK):
+            chunk = symbols[i:i + self.MULTI_CHUNK]
+            self.limiter.wait()
+            try:
+                req = StockLatestQuoteRequest(symbol_or_symbols=chunk,
+                                              feed='sip')
+                quotes = self._stock_data.get_stock_latest_quote(req)
+            except Exception as e:
+                log_forensic('api_event', event='get_quotes_multi',
+                             status='error', n_symbols=len(chunk),
+                             error=str(e))
+                continue
+            for sym in chunk:
+                q = quotes.get(sym)
+                if q is None:
+                    continue
+                try:
+                    bid, ask = float(q.bid_price), float(q.ask_price)
+                except (TypeError, ValueError):
+                    continue
+                out[sym] = {'bid': bid, 'ask': ask,
+                            'mid': round((bid + ask) / 2, 4),
+                            'time': q.timestamp.isoformat()}
         return out
 
     def get_quote(self, ticker):
@@ -461,6 +589,315 @@ class AlpacaManager:
 
 
 # ─── OCC SYMBOL HELPERS ────────────────────────────────────────────────────────
+
+    # ── Account activities (fills) ────────────────────────────────────────────
+
+    TRADING_BASE_PAPER = 'https://paper-api.alpaca.markets'
+    TRADING_BASE_LIVE = 'https://api.alpaca.markets'
+
+    def get_fill_activities(self, after=None, until=None, page_limit=50):
+        """Every FILL and PARTIAL_FILL on the account, newest first.
+
+        Returns a list of normalized dicts:
+          {activity_id, order_id, symbol, side, qty, price, transaction_time,
+           type, cum_qty, leaves_qty}
+
+        WHY THIS TALKS REST INSTEAD OF THE SDK
+          alpaca-py has moved the activities call and its request model across
+          versions. The /v2/account/activities/FILL endpoint has not changed.
+          We try the SDK first so we inherit its auth and retry behaviour, and
+          fall back to the documented REST route when the SDK on this machine
+          does not expose it. Both paths return the same normalized shape.
+
+        after/until are ISO timestamps. Paginates until exhausted or
+        page_limit pages, whichever comes first (100 records per page, so the
+        default ceiling is 5,000 fills).
+        """
+        self._require()
+
+        rows = self._fills_via_sdk(after, until, page_limit)
+        if rows is not None:
+            return rows
+        return self._fills_via_rest(after, until, page_limit)
+
+    def _fills_via_sdk(self, after, until, page_limit):
+        """Returns None (not []) when the SDK can't do it, so the caller
+        knows to fall back rather than believing the account has no fills."""
+        try:
+            from alpaca.trading.requests import GetAccountActivitiesRequest
+        except Exception:
+            return None
+        if not hasattr(self._trading, 'get_account_activities'):
+            return None
+
+        out, token = [], None
+        try:
+            for _ in range(page_limit):
+                kw = {'activity_types': ['FILL'], 'page_size': 100}
+                if after:
+                    kw['after'] = after
+                if until:
+                    kw['until'] = until
+                if token:
+                    kw['page_token'] = token
+                try:
+                    req = GetAccountActivitiesRequest(**kw)
+                except TypeError:
+                    kw.pop('activity_types', None)
+                    kw['activity_types'] = 'FILL'
+                    req = GetAccountActivitiesRequest(**kw)
+
+                self.limiter.wait()
+                page = self._trading.get_account_activities(req)
+                page = list(page or [])
+                if not page:
+                    break
+                for a in page:
+                    row = self._norm_activity(a)
+                    if row:
+                        out.append(row)
+                token = getattr(page[-1], 'id', None)
+                if not token or len(page) < 100:
+                    break
+            return out
+        except Exception as e:
+            log_forensic('api_event', event='activities_sdk', status='error',
+                         error=str(e))
+            return None
+
+    @staticmethod
+    def _rfc3339(v):
+        """Normalize a timestamp to what the activities endpoint accepts.
+
+        The docs allow exactly two shapes: YYYY-MM-DD and YYYY-MM-DDTHH:MM:SSZ.
+        A naive isoformat() emits microseconds and no zone, which the endpoint
+        rejects with 422. Fractions of a second are not accepted anywhere in
+        this API, so they are dropped rather than rounded.
+        """
+        if v in (None, ''):
+            return None
+        if isinstance(v, datetime):
+            dt = v
+        else:
+            txt = str(v).strip()
+            if len(txt) == 10 and txt[4] == '-':      # already YYYY-MM-DD
+                return txt
+            try:
+                dt = datetime.fromisoformat(txt.replace('Z', '+00:00'))
+            except ValueError:
+                return txt                            # hand it over untouched
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt.replace(microsecond=0).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    def _fills_via_rest(self, after, until, page_limit):
+        import json as _json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        if not self._key or not self._secret:
+            raise RuntimeError('No stored credentials for the activities call.')
+
+        base = (self.TRADING_BASE_PAPER if self.paper
+                else self.TRADING_BASE_LIVE)
+        after = self._rfc3339(after)
+        until = self._rfc3339(until)
+
+        def fetch(path, extra, token):
+            q = dict(extra)
+            q['page_size'] = 100
+            if after:
+                q['after'] = after
+            if until:
+                q['until'] = until
+            if token:
+                q['page_token'] = token
+            url = f'{base}{path}?' + urllib.parse.urlencode(q)
+            req = urllib.request.Request(url, headers={
+                'APCA-API-KEY-ID': self._key,
+                'APCA-API-SECRET-KEY': self._secret,
+                'accept': 'application/json'})
+            self.limiter.wait()
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return _json.loads(r.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                # Alpaca explains itself in the response body. Reading it is
+                # the difference between "422 Unprocessable Entity" and an
+                # error that names the offending parameter.
+                try:
+                    detail = e.read().decode('utf-8', 'replace')[:400]
+                except Exception:
+                    detail = ''
+                raise RuntimeError(
+                    f'Alpaca {e.code} on {path}: {detail or e.reason}') from None
+
+        # Two request shapes, because Alpaca exposes both and the path form
+        # has been the less reliable of the two.
+        shapes = [('/v2/account/activities/FILL', {}),
+                  ('/v2/account/activities', {'activity_types': 'FILL'})]
+
+        last_err = None
+        for path, extra in shapes:
+            out, token = [], None
+            try:
+                for _ in range(page_limit):
+                    page = fetch(path, extra, token)
+                    if not page:
+                        break
+                    for a in page:
+                        row = self._norm_activity(a)
+                        if row:
+                            out.append(row)
+                    token = (page[-1] or {}).get('id')
+                    if not token or len(page) < 100:
+                        break
+                return out
+            except RuntimeError as e:
+                last_err = e
+                log_forensic('api_event', event='activities_rest',
+                             status='error', error=str(e), shape=path)
+                continue
+
+        raise last_err if last_err else RuntimeError(
+            'Alpaca activities request failed with no error recorded.')
+
+    def get_nontrade_activities(self, after=None, until=None, page_limit=50):
+        """Every NON-trade activity: fees, dividends, interest, transfers,
+        option assignments and exercises.
+
+        Same endpoint as the fills, different shape. A non-trade activity has
+        `date` and `net_amount` rather than `transaction_time` and price/qty,
+        and `net_amount` is already signed, so a fee arrives negative.
+
+        No activity_type filter is sent. Alpaca's type codes change as they
+        add products, and enumerating them here would silently drop whatever
+        is new; taking everything and discarding the fills is stable.
+        """
+        self._require()
+        rows = self._nontrade_via_rest(after, until, page_limit)
+        return rows
+
+    def _nontrade_via_rest(self, after, until, page_limit):
+        import json as _json
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        if not self._key or not self._secret:
+            raise RuntimeError('No stored credentials for the activities call.')
+
+        base = (self.TRADING_BASE_PAPER if self.paper
+                else self.TRADING_BASE_LIVE)
+        after = self._rfc3339(after)
+        until = self._rfc3339(until)
+
+        out, token = [], None
+        for _ in range(page_limit):
+            q = {'page_size': 100}
+            if after:
+                q['after'] = after
+            if until:
+                q['until'] = until
+            if token:
+                q['page_token'] = token
+            url = f'{base}/v2/account/activities?' + urllib.parse.urlencode(q)
+            req = urllib.request.Request(url, headers={
+                'APCA-API-KEY-ID': self._key,
+                'APCA-API-SECRET-KEY': self._secret,
+                'accept': 'application/json'})
+            self.limiter.wait()
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    page = _json.loads(r.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = e.read().decode('utf-8', 'replace')[:400]
+                except Exception:
+                    detail = ''
+                log_forensic('api_event', event='nontrade_rest',
+                             status='error', error=f'{e.code} {detail}')
+                raise RuntimeError(
+                    f'Alpaca {e.code} on activities: {detail or e.reason}') from None
+            if not page:
+                break
+            for a in page:
+                row = self._norm_nontrade(a)
+                if row:
+                    out.append(row)
+            token = (page[-1] or {}).get('id')
+            if not token or len(page) < 100:
+                break
+        return out
+
+    @staticmethod
+    def _norm_nontrade(a):
+        """One non-trade activity -> our shape. Fills are dropped."""
+        def g(k):
+            return a.get(k) if isinstance(a, dict) else getattr(a, k, None)
+
+        kind = str(g('activity_type') or '').upper()
+        if kind in ('FILL', 'PARTIAL_FILL', ''):
+            return None
+
+        amt = _safe_float(g('net_amount'))
+        if amt is None:
+            return None
+
+        when = g('date') or g('transaction_time') or ''
+        if hasattr(when, 'isoformat'):
+            when = when.isoformat()
+        when = str(when)[:10]
+
+        return {
+            'activity_id': str(g('id') or ''),
+            'activity_type': kind,
+            'date': when,
+            'net_amount': amt,
+            'description': str(g('description') or ''),
+            'symbol': str(g('symbol') or ''),
+            'qty': _safe_float(g('qty')),
+            'status': str(g('status') or ''),
+        }
+
+    @staticmethod
+    def _norm_activity(a):
+        """One activity -> our shape. Accepts an SDK object or a dict."""
+        def g(k):
+            if isinstance(a, dict):
+                return a.get(k)
+            return getattr(a, k, None)
+
+        symbol = g('symbol')
+        side = str(g('side') or '').lower()
+        if '.' in side:                      # OrderSide.BUY -> buy
+            side = side.split('.')[-1]
+        if side not in ('buy', 'sell') or not symbol:
+            return None
+
+        qty = _safe_float(g('qty'))
+        price = _safe_float(g('price'))
+        if not qty or price is None:
+            return None
+
+        t = g('transaction_time')
+        if hasattr(t, 'isoformat'):
+            t = t.isoformat()
+
+        return {
+            'activity_id': str(g('id') or ''),
+            'order_id': str(g('order_id') or ''),
+            'symbol': str(symbol).strip(),
+            'side': side,
+            'qty': abs(qty),
+            'price': price,
+            'transaction_time': str(t or ''),
+            'type': str(g('type') or ''),
+            'cum_qty': _safe_float(g('cum_qty')),
+            'leaves_qty': _safe_float(g('leaves_qty')),
+        }
+
 
 def _occ_strike(symbol):
     """Strike from an OCC symbol: last 8 chars are strike × 1000."""

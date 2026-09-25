@@ -62,10 +62,12 @@ TRADE_LOG_HEADER = [
 
 SIGNAL_LOG_HEADER = [
     'timestamp', 'ticker', 'bar_time',
-    'launch_gate_passed', 'launch_gate_reason',
-    'step2_votes_long', 'step2_votes_short', 'step2_votes_hold',
-    'step2_result',
-    'step3_macro_state', 'step3_result',
+    'gate_passed', 'gate_reason',
+    'trend',           # 34/50 verdict: up / down / chop (Rule 1)
+    'trigger',         # 5/12 cross: fresh_long / fresh_short / none (Rule 2)
+    'price_vs_5_12',   # close vs the 5/12 cloud: above / below / inside
+    'price_vs_34_50',  # close vs the 34/50 cloud: above / below / inside
+    'exit_kind',       # structural / ride_end / '' (Rule 3)
     'final_action', 'notes',
 ]
 

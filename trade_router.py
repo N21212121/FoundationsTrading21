@@ -8,23 +8,24 @@ Owns everything between a signal-engine decision and the broker:
       shares. No qualifying contract -> 100% shares (long only).
     - Strike selection against the locked options spec.
     - Combo sleeve rules: long = calls + shares; short = puts only.
+    - shares_only rules (OU): shares both ways; a short leg is a genuine
+      short sale and stays dormant behind engine_ou.ALLOW_SHORTS.
 
   EXECUTION
     - Policy A: options leg first, shares best-effort. A failed share leg
       leaves an options-only position; freed dollars recycle to cash.
-    - Order intents -> alpaca_manager calls -> position state updates.
+    - Order intents -> alpaca_manager calls -> order log. Fills are
+      confirmed via get_order before the caller updates position state.
 
-  MONITORING (the 10-second loop body)
-    - Share stop  -5.00% unconditional         (suppressed before 10:00 ET)
-    - Option stop -7.00% EMA12-break confirmed; -15% unconditional floor
-                                                (suppressed before 10:00 ET)
-    - Breakeven ratchet: premium ever +10% over entry -> exit at/below
-      entry, unconditional (profit exit, no rebuy block)
-    - Premium trail: sell options when premium <= 60% of peak since entry
-    - MACD-collapse: sell sleeve when |EMA5-EMA12 spread| <= 70% of peak
-    - First exit to fire wins. Stops set a no-same-day-rebuy flag;
-      profit exits allow same-day rebuy.
-    - Peak references reset when a position is added to.
+  EXITS — ENGINE-DRIVEN ONLY. READ THIS.
+    There are NO price stops, trails, ratchets, premium monitors, or
+    MACD-collapse exits in this file anymore. The engines emit EXIT on a
+    bar close (Ripster: 5/12 ride-end, 34/50 structural; OU: profit
+    target, time stop, invalidation, circuit breaker) and plan_exit()
+    only builds the closing legs. A gap through a level exits on the
+    NEXT bar close, not at the level. That is the accepted design.
+    Stop-outs (exit_kind='structural') set a same-day no-rebuy flag;
+    profit exits do not.
 
 HARDCODED CONSTANTS BY DESIGN — edit + commit to change.
 """
@@ -105,14 +106,23 @@ def pick_contract(chain, want_type, spot):
 
 # ─── PLANNING ──────────────────────────────────────────────────────────────────
 
-def plan_entry(direction, budget_dollars, spot, chain):
-    """Build the entry plan for a combo position.
+def plan_entry(direction, budget_dollars, spot, chain, execution='options_combo'):
+    """Build the entry plan.
 
-    long  -> calls + shares (fill-and-spill)
-    short -> puts only (shares are long-only); no qualifying put -> no trade.
+    execution='options_combo' (Ripster):
+      long  -> calls + shares (fill-and-spill)
+      short -> puts only (shares are long-only); no qualifying put -> no trade.
+
+    execution='shares_only' (OU reversion):
+      shares both ways, no options leg ever. A reversion trade expects one or
+      two sigma of a residual over a few half-lives; option premium and theta
+      eat that before it arrives, and you would be buying IV right after the
+      spike that created the signal. The engine declares this, not the user.
 
     Returns {'legs': [...], 'reason': str}. Legs in EXECUTION ORDER
     (options first per Policy A)."""
+    if execution == 'shares_only':
+        return _plan_shares_only(direction, budget_dollars, spot)
     want_type = 'call' if direction == 'long' else 'put'
     contract = pick_contract(chain, want_type, spot)
 
@@ -151,6 +161,24 @@ def plan_entry(direction, budget_dollars, spot, chain):
     return {'legs': legs, 'reason': f"long: {len(legs)} leg(s)"}
 
 
+def _plan_shares_only(direction, budget_dollars, spot):
+    """Shares both ways. A short leg here is a genuine short sale: it needs a
+    margin account and it carries unbounded loss. engine_ou.ALLOW_SHORTS is
+    False by default precisely so this path stays dormant until you turn it on
+    deliberately."""
+    if spot <= 0 or budget_dollars <= 0:
+        return {'legs': [], 'reason': 'shares_only: no budget or no price'}
+    shares = int(budget_dollars // spot)
+    if shares < 1:
+        return {'legs': [],
+                'reason': f'shares_only: budget ${budget_dollars:.0f} < '
+                          f'one share at ${spot:.2f}'}
+    side = 'buy' if direction == 'long' else 'sell'
+    return {'legs': [{'kind': 'shares', 'side': side, 'qty': shares,
+                      'est_price': spot}],
+            'reason': f'shares_only: {side} {shares} share(s)'}
+
+
 def _option_leg(contract, contracts):
     return {'kind': 'option', 'side': 'buy', 'symbol': contract['symbol'],
             'contracts': contracts, 'est_premium': contract['mid'],
@@ -159,16 +187,28 @@ def _option_leg(contract, contracts):
 
 
 def plan_exit(position, sleeve='both'):
-    """Sell legs for an open position. sleeve: 'both'|'shares'|'options'.
-    All-at-once, no stepping out."""
+    """Closing legs for an open position. sleeve: 'both'|'shares'|'options'.
+    All-at-once, no stepping out.
+
+    Direction-aware on the share leg: a long position SELLS to close; a
+    short-shares position (shares_only engines with ALLOW_SHORTS on) BUYS
+    to cover. Without this, the day ALLOW_SHORTS flips, every short exit
+    would sell deeper into the short instead of closing it. Share counts
+    are stored as positive quantities with `direction` carrying the sign;
+    that convention is what makes the cover side computable here. Options
+    are always long premium in this system (BUY_TO_OPEN only), so the
+    option leg always sells, regardless of direction."""
+    direction = (position.get('direction') or 'long').lower()
     legs = []
     if sleeve in ('both', 'options') and position.get('option_contracts', 0) > 0:
         legs.append({'kind': 'option', 'side': 'sell',
                      'symbol': position['option_symbol'],
                      'contracts': position['option_contracts']})
-    if sleeve in ('both', 'shares') and position.get('shares', 0) > 0:
-        legs.append({'kind': 'shares', 'side': 'sell',
-                     'qty': position['shares']})
+    sh = int(position.get('shares') or 0)
+    if sleeve in ('both', 'shares') and sh > 0:
+        legs.append({'kind': 'shares',
+                     'side': 'buy' if direction == 'short' else 'sell',
+                     'qty': sh})
     return legs
 
 
