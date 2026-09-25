@@ -16,6 +16,12 @@
     --text: #2b3a52;        /* dark blue text */
     --text-dim: #6a7689;
     --green: #1e7e4d; --red: #c0392b; --border: #c9cfdc;
+    /* --scarlet is a yellow (#F9E04C) and works as a FILL behind navy text.
+       As a foreground on a light background it measures 1.33:1, which is
+       effectively invisible. --royal is its foreground counterpart: same
+       accent role, 5.35:1 at worst against every background in use,
+       including the tinted screener cards. Fills stay yellow. */
+    --royal: #3457C5;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -3076,7 +3082,7 @@ function scrRow(x, dim) {
       ${dist?`<div style="font-size:12px;margin-top:3px;">${dist}</div>`:''}
       ${x.trigger && x.trigger!=='none'?`<div style="font-size:14px;
          font-weight:600;letter-spacing:.2px;
-         color:var(--scarlet);margin-top:3px;">${x.trigger}</div>`:''}
+         color:var(--royal);margin-top:3px;">${x.trigger}</div>`:''}
       ${bits.length?`<div style="font-size:11px;color:var(--text-dim);
          margin-top:2px;">${bits.join(' · ')}</div>`:''}
       ${scrPlayBlock(x)}
@@ -3461,11 +3467,11 @@ function scrChartDraw() {
       const manual = l.kind === 'manual';
       const y = Y(l.price);
       levelSvg += `<line x1="${PADL}" y1="${y.toFixed(1)}" x2="${W - PADR}"
-          y2="${y.toFixed(1)}" stroke="${manual ? 'var(--scarlet)' : 'var(--text-dim)'}"
+          y2="${y.toFixed(1)}" stroke="${manual ? 'var(--royal)' : 'var(--text-dim)'}"
           stroke-width="${manual ? 1.4 : 1}" stroke-dasharray="${manual ? '' : '4 4'}"
           opacity="${manual ? .9 : .5}"/>
         <text x="${W - PADR + 4}" y="${(y + 3.5).toFixed(1)}" font-size="10"
-          fill="${manual ? 'var(--scarlet)' : 'var(--text-dim)'}">${l.name} ${l.price}</text>`;
+          fill="${manual ? 'var(--royal)' : 'var(--text-dim)'}">${l.name} ${l.price}</text>`;
     });
   }
 
@@ -3479,7 +3485,7 @@ function scrChartDraw() {
     const up = a.direction === 'long';
     marks += `<polygon points="${x.toFixed(1)},${(y+2).toFixed(1)}
         ${(x-5).toFixed(1)},${(y-8).toFixed(1)} ${(x+5).toFixed(1)},${(y-8).toFixed(1)}"
-        fill="var(--scarlet)" transform="${up ? '' :
+        fill="var(--royal)" transform="${up ? '' :
           `rotate(180 ${x.toFixed(1)} ${(y-3).toFixed(1)})`}">
         <title>${a.at.replace('T',' ')} — ${a.state.replace('_',' ')} ${a.direction||''}
 near ${a.level||''} ${a.level_price||''}</title></polygon>`;
@@ -3489,7 +3495,7 @@ near ${a.level||''} ${a.level_price||''}</title></polygon>`;
   $('scrChartMeta').innerHTML =
     `${d.tf} · ${n} closed bars · last ${last.time.replace('T',' ').slice(0,16)}` +
     ` · ${moneyFull(last.close)}` + (d.atr ? ` · ATR ${d.atr}` : '') +
-    ((d.alerts||[]).length ? ` · <span style="color:var(--scarlet)">${d.alerts.length} alert(s)</span>` : '');
+    ((d.alerts||[]).length ? ` · <span style="color:var(--royal)">${d.alerts.length} alert(s)</span>` : '');
 
   $('scrChartBody').innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:${H}px;display:block;">
@@ -3507,9 +3513,9 @@ near ${a.level||''} ${a.level_price||''}</title></polygon>`;
       <span><span style="color:rgba(30,126,77,1);font-weight:700;">▬</span> 5/12</span>
       <span><span style="color:rgba(46,117,182,1);font-weight:700;">▬</span> 34/50</span>
       ${showMtf?'<span><span style="color:rgba(147,112,219,1);font-weight:700;">▬</span> 1H 34/50 MTF</span>':''}
-      <span><span style="color:var(--scarlet);font-weight:700;">▬</span> your pivots</span>
+      <span><span style="color:var(--royal);font-weight:700;">▬</span> your pivots</span>
       <span style="color:var(--text-dim);">- - computed levels</span>
-      <span><span style="color:var(--scarlet);">▲</span> alert</span>
+      <span><span style="color:var(--royal);">▲</span> alert</span>
     </div>
     ${d.note?`<div style="font-size:12px;color:var(--text-dim);margin-top:8px;
        border-top:1px solid var(--border);padding-top:7px;">${d.note}</div>`:''}`;
@@ -4611,7 +4617,7 @@ function perfTrendDraw() {
   // than detail, which is the point -- the shape is what carries.
   const benchLine = bench == null ? '' :
     `<line x1="${PADL}" y1="${Y(bench).toFixed(1)}" x2="${W - PADR}"
-       y2="${Y(bench).toFixed(1)}" stroke="var(--scarlet)" stroke-width="1.6"
+       y2="${Y(bench).toFixed(1)}" stroke="var(--royal)" stroke-width="1.6"
        stroke-dasharray="6 4" opacity=".85"/>`;
 
   const latest = avg[avg.length - 1];
@@ -4621,7 +4627,7 @@ function perfTrendDraw() {
     `all-time avg <b>${fmt(latest)}</b>` +
     (metric === 'cum_pl' ? '' :
       ` &middot; range ${fmt(Math.min(...vals))} to ${fmt(Math.max(...vals))}`) +
-    (bench != null ? ` &middot; <span style="color:var(--scarlet)">book avg
+    (bench != null ? ` &middot; <span style="color:var(--royal)">book avg
        ${fmt(bench)}</span>` : '');
 
   box.innerHTML = `
@@ -4642,7 +4648,7 @@ function perfTrendDraw() {
         <span style="color:var(--navy);font-weight:700;">&mdash;</span> all-time average
         &nbsp;&middot;&nbsp;
         <span style="color:var(--navy-3);opacity:.6;font-weight:700;">&mdash;</span> per trade
-        ${bench != null ? '&nbsp;&middot;&nbsp;<span style="color:var(--scarlet);font-weight:700;">- -</span> whole book' : ''}
+        ${bench != null ? '&nbsp;&middot;&nbsp;<span style="color:var(--royal);font-weight:700;">- -</span> whole book' : ''}
       </span>
     </div>`;
 }
