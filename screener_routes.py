@@ -351,15 +351,32 @@ def make_bp(alpaca):
     @bp.route('/api/screen/settings', methods=['POST'])
     def screen_settings():
         b = request.json or {}
-        slots = b.get('slots')
-        if slots is not None:
-            try:
-                slots = max(1, min(20, int(slots)))
-            except (TypeError, ValueError):
-                return _fail('slots must be a number')
+        # 'slots' is accepted and ignored. The board is no longer capped by
+        # choice -- it shows everything clearing min_state up to
+        # screener.MAX_TICKERS -- but the current front end still posts the
+        # field, and rejecting it would break a working screen over a value
+        # nothing reads. Drop this once index.html stops sending it.
         return jsonify({'ok': True, 'settings': SVC.configure(
-            slots=slots, min_state=b.get('min_state'),
+            min_state=b.get('min_state'),
             alert_on=b.get('alert_on'), enabled=b.get('enabled'))})
+
+    @bp.route('/api/screen/prices')
+    def screen_prices():
+        """Live mids from the five-second feed, for every watched ticker.
+
+        Cheap and safe to poll: it reads a dict the feed thread already
+        filled and never touches the data API itself. The feed's own state
+        rides along so the UI can show whether prices are actually moving
+        rather than silently rendering a stale board.
+        """
+        return jsonify({'ok': True, 'prices': SVC.live_prices(),
+                        'feed': SVC.feed_state()})
+
+    @bp.route('/api/screen/standby/<ticker>')
+    def screen_standby(ticker):
+        """Recent level crossings for one ticker."""
+        return jsonify({'ok': True, 'ticker': ticker.upper(),
+                        'standby': SVC.standby_history(ticker)})
 
     @bp.route('/api/screen/weights', methods=['GET', 'POST'])
     def screen_weights():

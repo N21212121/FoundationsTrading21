@@ -40,7 +40,19 @@ import levels as LV
 NEAR_ATR = 0.20
 APPROACH_ATR = 0.50
 
-DEFAULT_SLOTS = 5
+# The board used to hold a handful of SLOTS, on the argument that forty
+# tickers on a bar-close cycle will always find something, and that a tool
+# surfacing forty items a day gets ignored inside a week.
+#
+# That argument was about a list a human reads top-to-bottom once a minute.
+# It is weaker now that price_feed.py watches every row continuously and says
+# which one just moved: the reader is pulled to a row rather than sweeping all
+# of them, so the cost of a longer list is no longer attention per row.
+#
+# What remains is a resource ceiling, not an attention one. Fifty names is one
+# batched quote request (alpaca_manager.MULTI_CHUNK is 200) and one bar sweep,
+# so it is the point past which the five-second feed stops being free.
+MAX_TICKERS = 50
 
 # How much clear air counts as "room". One full daily ATR between the level
 # and the next obstacle is treated as a clean runway; less is proportionally
@@ -461,8 +473,8 @@ def score_ticker(entry, daily_bars, bars10, price=None, hourly_bars=None,
     }
 
 
-def rank(rows, slots=DEFAULT_SLOTS, min_state='approaching'):
-    """Cap and order.
+def rank(rows, min_state='approaching', max_tickers=MAX_TICKERS):
+    """Order, and cap at the resource ceiling.
 
     A ticker with a LIVE play outranks everything else, best grade first:
     you wrote that condition down this morning and it has fired. Below
@@ -479,11 +491,11 @@ def rank(rows, slots=DEFAULT_SLOTS, min_state='approaching'):
         order.get(r['state'], 3),
         -r['score'],
     ))
-    return keep[:slots]
+    return keep[:max_tickers]
 
 
-def scan(entries, bar_getter, slots=DEFAULT_SLOTS, min_state='approaching',
-         weights=None, plays_by_ticker=None):
+def scan(entries, bar_getter, min_state='approaching',
+         weights=None, plays_by_ticker=None, max_tickers=MAX_TICKERS):
     """Score every entry and return the capped board plus everything else.
 
     bar_getter(ticker) -> (daily_bars, intraday_bars) or
@@ -502,7 +514,7 @@ def scan(entries, bar_getter, slots=DEFAULT_SLOTS, min_state='approaching',
         except Exception as ex:
             errors.append({'ticker': e.get('ticker'),
                            'error': f'{type(ex).__name__}: {ex}'})
-    board = rank(scored, slots=slots, min_state=min_state)
+    board = rank(scored, min_state=min_state, max_tickers=max_tickers)
     # Keyed on entry id, not ticker: the same symbol can legitimately appear
     # twice (two plays, two notes), and keying on ticker silently drops one.
     on_board = {id(r) for r in board}
@@ -513,7 +525,11 @@ def scan(entries, bar_getter, slots=DEFAULT_SLOTS, min_state='approaching',
         'bench': sorted([r for r in scored if id(r) not in on_board],
                         key=lambda r: -r['score']),
         'errors': errors,
-        'slots': slots,
+        'max_tickers': max_tickers,
+        # Kept so the current front end, which prints "n/slots slots", keeps
+        # rendering. It is the ceiling now, not a chosen number. Remove once
+        # index.html stops reading it.
+        'slots': max_tickers,
         'at': datetime.now().isoformat(timespec='seconds'),
     }
 

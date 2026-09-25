@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import config_manager as cm
+import price_feed as PF
 import screener as SC
 import watchlist as WL
 
@@ -110,7 +111,11 @@ def _load_weights():
 
 
 _settings = {
-    'slots': SC.DEFAULT_SLOTS,
+    # No longer chosen. The board shows everything that clears min_state, up
+    # to screener.MAX_TICKERS. Kept in the dict because the current front end
+    # reads settings.slots; it reports the ceiling and setting it does
+    # nothing. Remove once index.html stops asking for it.
+    'slots': SC.MAX_TICKERS,
     'min_state': 'approaching',
     'enabled': True,
     'alert_on': 'at_level',      # at_level | triggered
@@ -142,7 +147,10 @@ def settings():
 
 def configure(**kw):
     with _lock:
-        for k in ('slots', 'min_state', 'enabled', 'alert_on'):
+        # 'slots' is deliberately absent: the board is no longer capped by
+        # choice, so accepting the field would let the UI think it had set
+        # something. It is tolerated and dropped at the route instead.
+        for k in ('min_state', 'enabled', 'alert_on'):
             if k in kw and kw[k] is not None:
                 _settings[k] = kw[k]
         return dict(_settings)
@@ -150,8 +158,11 @@ def configure(**kw):
 
 def state():
     with _lock:
-        return {**_state, 'settings': dict(_settings),
-                'pending_alerts': len(_alerts)}
+        st = {**_state, 'settings': dict(_settings),
+              'pending_alerts': len(_alerts)}
+    # Outside the lock: the feed keeps its own.
+    st['feed'] = PF.spool().state()
+    return st
 
 
 def drain_alerts(limit=50):
@@ -168,13 +179,41 @@ def peek_alerts():
         return list(_alerts)
 
 
-def scan_once(alpaca, entries=None, slots=None, min_state=None,
-              raise_errors=False):
+def _emit_standby(rec):
+    """Receive one standby from the price feed and queue it like any alert.
+
+    Standbys share the queue so the UI has one thing to drain, and carry
+    kind='standby' so it can tell them apart. They deliberately do NOT go
+    through _gate: that gate tracks the scan's escalation ladder
+    (idle -> approaching -> at_level -> triggered) and a standby is not a
+    rung on it. The feed does its own per-level cooldown instead.
+    """
+    with _lock:
+        _alerts.append(rec)
+        hist = _alert_history.setdefault(rec['ticker'], deque(maxlen=40))
+        hist.append(rec)
+
+
+def live_prices():
+    """Last traded mid per watched ticker, from the five-second feed."""
+    return PF.spool().prices()
+
+
+def feed_state():
+    return PF.spool().state()
+
+
+def standby_history(ticker, limit=40):
+    return PF.spool().history(ticker, limit)
+
+
+def scan_once(alpaca, entries=None, min_state=None, raise_errors=False):
     """One pass. Returns the scan result, or None when it cannot run."""
     entries = entries if entries is not None else WL.today()
     if not entries:
         return {'board': [], 'watched': 0, 'scored': 0, 'bench': [],
-                'errors': [], 'slots': slots or _settings['slots'],
+                'errors': [], 'slots': SC.MAX_TICKERS,
+                'max_tickers': SC.MAX_TICKERS,
                 'at': datetime.now().isoformat(timespec='seconds'),
                 'note': 'watchlist is empty for today'}
 
@@ -198,14 +237,21 @@ def scan_once(alpaca, entries=None, slots=None, min_state=None,
                 drop_forming(hourly.get(t, []), '1Hour', now_et))
 
     with _lock:
-        s = slots if slots is not None else _settings['slots']
         ms = min_state if min_state is not None else _settings['min_state']
         w = dict(_settings['weights'])
     import plays as PL
     from datetime import date as _date
     pbt = PL.by_ticker(for_date=_date.today().isoformat())
-    result = SC.scan(entries, getter, slots=s, min_state=ms, weights=w,
+    result = SC.scan(entries, getter, min_state=ms, weights=w,
                      plays_by_ticker=pbt)
+    # Hand the fresh level sets to the live feed. Board AND bench: a ticker
+    # off the board still has levels worth watching, and that is exactly the
+    # one about to cross back into relevance.
+    try:
+        PF.spool().set_levels(result.get('board', []) + result.get('bench', []))
+    except Exception as e:
+        cm.log_forensic('api_event', event='price_feed_levels',
+                        status='error', error=str(e))
     # Keep what was seen so later trades can be matched to it. Logging is a
     # side channel: a disk error here must never cost the board.
     try:
@@ -296,6 +342,10 @@ def loop(alpaca):
 def start(alpaca):
     t = threading.Thread(target=loop, args=(alpaca,), daemon=True)
     t.start()
+    # The price feed runs on its own clock. It is started here rather than in
+    # loop() so that a scan pass failing, or the screener being disabled,
+    # never takes the live prices down with it.
+    PF.start(alpaca, _emit_standby)
     return t
 
 
