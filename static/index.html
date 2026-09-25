@@ -67,6 +67,16 @@
   .scrCard.triggered  { border-left-color: var(--scarlet); }
   .scrCard.at_level   { border-left-color: var(--navy); }
   .scrCard.approaching{ border-left-color: var(--border); }
+  /* A level crossing. Passive on purpose: it fades rather than demanding a
+     dismissal, because the feed cannot tell a close through a level from a
+     wick through it. The reorder is the real signal. */
+  .scrCard { transition: background-color .5s ease, box-shadow .5s ease; }
+  .scrCard.scrCrossed {
+    background: var(--card-2);
+    box-shadow: inset 3px 0 0 0 var(--gold, #C8A55B);
+  }
+  /* Live price ticks colour briefly, then settle. */
+  [data-live] { transition: color .8s ease; font-variant-numeric: tabular-nums; }
   .scrTick { font-size:16px; font-weight:700; }
   .scrPill {
     display:inline-block; padding:1px 7px; border-radius:10px; font-size:10.5px;
@@ -608,9 +618,8 @@
   <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:0;">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:9px;">
       <h2 style="margin:0;border:0;padding:0;">Board</h2>
-      <label style="font-size:11.5px;color:var(--text-dim);">Slots
-        <input type="number" id="scrSlots" min="1" max="20" value="5"
-               onchange="scrSaveSettings()" style="width:56px;margin-left:4px;"></label>
+      <span id="scrFeed" title="live price feed"
+            style="font-size:11px;color:var(--text-dim);">feed idle</span>
       <label style="font-size:11.5px;color:var(--text-dim);">Alert at
         <select id="scrAlertOn" onchange="scrSaveSettings()" style="margin-left:4px;">
           <option value="at_level">At level</option>
@@ -2825,7 +2834,7 @@ async function plySavePreset() {
 
 /* ══════════════ SCREENER ══════════════ */
 
-let SCR = {inited:false, poll:null, notifyOK:false};
+let SCR = {inited:false, poll:null, notifyOK:false, boardSig:null};
 
 function scrToday() {
   const d = new Date();
@@ -2839,7 +2848,6 @@ async function scrInit() {
     scrAskNotify();
     try {
       const st = await fetch('/api/screen/state').then(r=>r.json());
-      $('scrSlots').value = st.settings.slots;
       $('scrAlertOn').value = st.settings.alert_on;
       $('scrEnabled').checked = st.settings.enabled;
     } catch (e) {}
@@ -2928,8 +2936,7 @@ async function scrClear() {
 async function scrSaveSettings() {
   await fetch('/api/screen/settings', {method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({slots: +$('scrSlots').value,
-                          alert_on: $('scrAlertOn').value,
+    body: JSON.stringify({alert_on: $('scrAlertOn').value,
                           enabled: $('scrEnabled').checked})});
   scrLoadBoard();
 }
@@ -3014,7 +3021,8 @@ function scrRow(x, dim) {
        r.journal_edge >= 0 ? '+' : '-'}$${Math.abs(r.journal_edge).toFixed(0)}</span>`);
   if (r.rel_volume != null) bits.push(`${r.rel_volume.toFixed(1)}x vol`);
   const bar = scrScoreBar(x);
-  return `<div class="scrCard ${x.state}" style="${dim?'opacity:.6;':''}"
+  return `<div class="scrCard ${x.state}" data-ticker="${x.ticker}"
+       style="${dim?'opacity:.6;':''}"
        onclick="scrDetail('${x.ticker}')">
       <div style="display:flex;align-items:baseline;gap:4px;">
         <span class="scrTick">${x.ticker}</span>${dirPill}${gate}${shelf}
@@ -3024,7 +3032,11 @@ function scrRow(x, dim) {
             ? `<b style="color:${x.play_live?'var(--navy)':'var(--text-dim)'};font-size:15px;">${
                 x.best_play.grade.toFixed(1)}</b> · `
             : (x.score!=null?`<b style="color:var(--text);">${(x.score*100).toFixed(0)}</b> · `:'')}
-          ${x.state.replace('_',' ')}${x.price!=null?' · '+moneyFull(x.price):''}</span>
+          <span data-state="${x.ticker}">${x.state.replace('_',' ')}</span>${
+            x.price!=null
+              ? ` · <span data-live="${x.ticker}" title="scan price ${moneyFull(x.price)}"
+                    >${moneyFull(x.live_price!=null?x.live_price:x.price)}</span>`
+              : ''}</span>
       </div>
       ${dist?`<div style="font-size:12px;margin-top:3px;">${dist}</div>`:''}
       ${x.trigger && x.trigger!=='none'?`<div style="font-size:11.5px;
@@ -3048,6 +3060,18 @@ function scrRender(res, meta) {
     $('scrStatus').textContent = meta && !meta.connected ? 'not connected' : '';
     return;
   }
+  // The board reorders server-side every ten seconds, but most passes change
+  // nothing. Redrawing regardless would throw away the one-second price
+  // patches, drop hover, and make the list twitch for no reason -- so redraw
+  // only when the ORDER or a STATE actually moved. Prices are never part of
+  // this signature; they are patched in place by scrPollPrices.
+  const sig = res.board.map(x => x.ticker + ':' + x.state).join('|') + '#' +
+              (res.bench||[]).map(x => x.ticker + ':' + x.state).join('|');
+  if (sig === SCR.boardSig && $('scrBoard').children.length) {
+    scrRenderStatus(res);
+    return;
+  }
+  SCR.boardSig = sig;
   $('scrBoard').innerHTML = res.board.length
     ? res.board.map(x => scrRow(x, false)).join('')
     : `<div style="color:var(--text-dim);padding:14px;">
@@ -3055,11 +3079,19 @@ function scrRender(res, meta) {
   $('scrBench').innerHTML = (res.bench||[]).length
     ? res.bench.slice(0,20).map(x => scrRow(x, true)).join('')
     : '<div style="color:var(--text-dim);font-size:12px;">—</div>';
+  scrRenderStatus(res);
+}
+
+function scrRenderStatus(res) {
   const errs = (res.errors||[]).length
     ? ` · <span style="color:var(--red)">${res.errors.length} error(s)</span>` : '';
   $('scrStatus').innerHTML =
-    `${res.watched} watched · ${res.board.length}/${res.slots} slots · ` +
-    `${(res.at||'').replace('T',' ').slice(11)}${errs}`;
+    `${res.watched} watched · ${res.board.length} shown` +
+    `<span style="color:var(--text-dim)"> of ${res.max_tickers||50} max</span> · ` +
+    `scan ${(res.at||'').replace('T',' ').slice(11)}` +
+    (res.reranked_at
+      ? `<span style="color:var(--text-dim)"> · order ${
+           res.reranked_at.replace('T',' ').slice(11)}</span>` : '') + errs;
 }
 
 const SCR_COMP_LABEL = {
@@ -3463,6 +3495,82 @@ async function scrPollAlerts() {
 }
 
 setInterval(scrPollAlerts, 15000);
+
+// ─── LIVE PRICES ──────────────────────────────────────────────────────────────
+// Three clocks, matching the backend. Prices patch in place every second;
+// the board reloads every ten to pick up the server-side reorder, and only
+// actually redraws when the order changed; the scan keeps its own minute.
+//
+// Crossings arrive here too. They are NOT alerts and must not pop anything --
+// a crossing cannot tell whether the bar closed through the level or merely
+// wicked through it. The row flashes and the ordering moves. That is all.
+
+function scrVisible() {
+  const v = $('screenView');
+  return v && v.style.display === 'flex';
+}
+
+async function scrPollPrices() {
+  if (!scrVisible() || !SCR.inited) return;
+  let r;
+  try {
+    r = await fetch('/api/screen/prices').then(x=>x.json());
+  } catch (e) {
+    const f = $('scrFeed');
+    if (f) { f.textContent = 'feed unreachable'; f.style.color = 'var(--red)'; }
+    return;
+  }
+  const prices = r.prices || {};
+  Object.keys(prices).forEach(t => {
+    const el = document.querySelector(`[data-live="${t}"]`);
+    if (!el) return;
+    const px = prices[t].price;
+    if (px == null) return;
+    const shown = el.textContent.trim();
+    const next = moneyFull(px);
+    if (shown !== next) {
+      el.textContent = next;
+      el.style.color = px > prices[t].prev ? 'var(--green)'
+                     : (px < prices[t].prev ? 'var(--red)' : '');
+    }
+  });
+
+  // A crossing marks its row for a few seconds. Passive by design.
+  (r.standbys || []).forEach(sb => {
+    const card = document.querySelector(`[data-ticker="${sb.ticker}"]`);
+    if (!card) return;
+    card.classList.add('scrCrossed');
+    card.title = `${sb.ticker} crossed ${sb.level} ${sb.level_price} ${sb.way} at ${
+      (sb.at||'').replace('T',' ').slice(11)}`;
+    setTimeout(() => card.classList.remove('scrCrossed'), 6000);
+  });
+
+  const f = $('scrFeed');
+  if (!f) return;
+  const fd = r.feed || {};
+  if (fd.last_error) {
+    f.textContent = 'feed error';
+    f.style.color = 'var(--red)';
+    f.title = fd.last_error;
+  } else if (!fd.in_session) {
+    f.textContent = 'feed idle (outside 04:00-20:00 ET)';
+    f.style.color = 'var(--text-dim)';
+    f.title = 'the tape is closed; prices resume with it';
+  } else {
+    f.textContent = `live ${fd.priced||0}/${fd.tickers||0} · ${
+      (fd.last_tick_at||'').replace('T',' ').slice(11)}`;
+    f.style.color = 'var(--green)';
+    f.title = `one batched quote request every ${fd.tick_seconds}s`;
+  }
+}
+
+async function scrPollBoard() {
+  if (!scrVisible() || !SCR.inited) return;
+  scrLoadBoard();
+}
+
+setInterval(scrPollPrices, 1000);
+setInterval(scrPollBoard, 10000);
 
 /* ══════════════ LEDGER ══════════════ */
 
