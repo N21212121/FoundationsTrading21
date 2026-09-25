@@ -67,13 +67,41 @@
   .scrCard.triggered  { border-left-color: var(--scarlet); }
   .scrCard.at_level   { border-left-color: var(--navy); }
   .scrCard.approaching{ border-left-color: var(--border); }
+
+  /* DIRECTION IS THE FILL, URGENCY IS THE EDGE.
+     The tints are the same two the direction pills already use, so a card and
+     its own pill cannot disagree about which way it is leaning.
+
+     Intensity tracks state on purpose. Tinting every row equally would paint
+     the whole board green and red, and a board where everything shouts
+     identifies nothing -- which is the opposite of what the colour is for.
+     So a setup that has arrived reads at full strength and one still on its
+     way reads at about half, while the left border keeps carrying urgency
+     on its own axis. A row with no direction stays neutral rather than being
+     guessed at. */
+  .scrCard.dir-long   { background:#f2f9f4; }
+  .scrCard.dir-short  { background:#fef5f4; }
+  /* Dim text measures 4.02:1 on the full tints against 4.60 on white, so the
+     smallest thing on the card -- the 11px component labels -- would drop
+     under AA purely because the card gained a colour. Redefining the variable
+     on the card rather than restating the colour means the inline
+     `color:var(--text-dim)` those labels already carry picks it up, and
+     nothing outside a tinted card changes. 4.79:1 at the worst tint. */
+  .scrCard.dir-long, .scrCard.dir-short { --text-dim: #5f6a7b; }
+  .scrCard.dir-long.at_level,
+  .scrCard.dir-long.triggered   { background:#e5f4ea; }
+  .scrCard.dir-short.at_level,
+  .scrCard.dir-short.triggered  { background:#fdecea; }
+
   /* A level crossing. Passive on purpose: it fades rather than demanding a
      dismissal, because the feed cannot tell a close through a level from a
-     wick through it. The reorder is the real signal. */
+     wick through it. The reorder is the real signal.
+     It marks with a rail and a ring rather than a fill, so it never argues
+     with the direction tint underneath it. */
   .scrCard { transition: background-color .5s ease, box-shadow .5s ease; }
   .scrCard.scrCrossed {
-    background: var(--card-2);
-    box-shadow: inset 3px 0 0 0 var(--gold, #C8A55B);
+    box-shadow: inset 3px 0 0 0 var(--gold, #C8A55B),
+                0 0 0 2px rgba(200,165,91,.35);
   }
   /* Live price ticks colour briefly, then settle. */
   [data-live] { transition: color .8s ease; font-variant-numeric: tabular-nums; }
@@ -3021,7 +3049,8 @@ function scrRow(x, dim) {
        r.journal_edge >= 0 ? '+' : '-'}$${Math.abs(r.journal_edge).toFixed(0)}</span>`);
   if (r.rel_volume != null) bits.push(`${r.rel_volume.toFixed(1)}x vol`);
   const bar = scrScoreBar(x);
-  return `<div class="scrCard ${x.state}" data-ticker="${x.ticker}"
+  return `<div class="scrCard ${x.state} dir-${x.direction||'none'}"
+       data-ticker="${x.ticker}"
        style="${dim?'opacity:.6;':''}"
        onclick="scrDetail('${x.ticker}')">
       <div style="display:flex;align-items:baseline;gap:4px;">
