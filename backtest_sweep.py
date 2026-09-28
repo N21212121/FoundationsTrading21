@@ -227,6 +227,15 @@ def fetch_streams(symbols, tf_needs, base_start, end, force=False):
 class RTHGate:
     """Wraps any StrategyEngine and refuses actions outside regular hours.
 
+    SUPERSEDED for entries, 2026-09-27. signal_engine.ENTRY_END now closes the
+    window producer-side, on the same half-open [09:30, 16:00) boundaries, and
+    engine_ripster_tf._time_gate reads it. So --rth entries is a no-op on top
+    of the engines: it can only re-block what the engine already blocked. The
+    wrapper is kept because --rth all still does something the engine does not
+    (it gates EXITS too, which the engine deliberately never will), and because
+    dropping it would silently change what every recorded sweep row means. Read
+    the paragraphs below as history, not as current architecture.
+
     A WRAPPER, not an engine edit, for two reasons. It keeps the fix in this
     file, where it is in scope. And it keeps engine_ripster_tf's control cell
     bit-identical to the live engine_ripster, which is what --selftest

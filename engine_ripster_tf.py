@@ -422,9 +422,11 @@ class RipsterTFEngine(StrategyEngine):
 
     @staticmethod
     def _time_gate(now_et):
-        """The opening pause half of signal_engine.launch_gate. Cheap, read
-        live from se.ENTRY_START so it cannot drift from the real spec."""
-        return now_et.time() >= se.ENTRY_START
+        """The session-window half of signal_engine.launch_gate. Cheap, read
+        live from se.ENTRY_START/se.ENTRY_END so it cannot drift from the real
+        spec. Half-open [start, end): see the note at signal_engine.ENTRY_END
+        for why a bar closing at 16:00 is out and one closing at 09:30 is in."""
+        return se.ENTRY_START <= now_et.time() < se.ENTRY_END
 
     @staticmethod
     def _volume_gate(raw_primary, now_et):
@@ -540,8 +542,10 @@ class RipsterTFEngine(StrategyEngine):
         time_ok = self._time_gate(now)
         gate = {'passed': time_ok, 'volume_ok': True,
                 'reason': ('gate open' if time_ok else
-                           f'opening pause: no entries before '
-                           f'{se.ENTRY_START.strftime("%H:%M")} ET')}
+                           f'outside entry window '
+                           f'{se.ENTRY_START.strftime("%H:%M")}-'
+                           f'{se.ENTRY_END.strftime("%H:%M")} ET '
+                           f'(bar closed {now.strftime("%H:%M")})')}
         decision['gate'] = gate
 
         held = position_direction

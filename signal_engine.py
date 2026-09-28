@@ -16,7 +16,8 @@ The Ripster EMA Cloud system, faithfully. Four rules, in strict priority:
        - price closes through the 34/50 cloud (you were wrong = structural stop)
      Either one closes the position.
 
-  4. GATE: entries allowed from ENTRY_START. Volume gates OPTIONS only, as
+  4. GATE: entries allowed from ENTRY_START until ENTRY_END -- regular hours
+     only. Volume gates OPTIONS only, as
      a PACE test: volume so far in the 9:30-10:00 window must be on pace
      for OPEN_VOL_MIN_FRAC of ADV by 10:00 (prorated by elapsed time, so it
      works while the window is still filling). 1-hour confirmation is
@@ -45,6 +46,24 @@ EMA_REGIME_B = 50
 
 WARMUP_BARS = 250            # min closed 10-min bars before any signal
 ENTRY_START = dtime(9, 30)   # EXPERIMENT: pause OFF, entries from the open (was 10:00)
+ENTRY_END = dtime(16, 0)     # no entries on a bar closing at or after the bell
+
+# Why ENTRY_END exists, and why the window is HALF-OPEN [09:30, 16:00).
+# now_et is the bar's CLOSE time, and a fill happens at the NEXT bar's open.
+#   - A bar closing at 09:30 is the 09:20-09:30 pre-market bar; it fills at the
+#     09:30 open, which is the opening drive ENTRY_START was moved here to
+#     catch. So 09:30 is IN.
+#   - A bar closing at 16:00 is the 15:50-16:00 bar; it would fill at the next
+#     bar's open, i.e. after the bell. So 16:00 is OUT.
+# Live was never exposed to this -- bar_loop checks alpaca.is_market_open()
+# before evaluating anything -- but the SIP feed the backtester replays covers
+# 04:00-20:00 ET, and with only a lower bound the replay entered on
+# extended-hours bars: 31% of AAPL entries and 46% of SPY entries in the
+# 2026-08 sweep. This is the producer-side fix for that, and it supersedes
+# backtest_sweep.RTHGate(mode='entries'), which patched the same hole
+# replay-side so the control cell could stay bit-identical to live.
+# Exits are deliberately NOT gated: launch_gate only ever guards entries, so a
+# position is never trapped behind the bell.
 
 # Volume gate (Ripster): a stock that trades a big share of its average daily
 # volume in the first 30 minutes is having a trend day. The original rule
@@ -150,7 +169,7 @@ def trend_context(df10):
 # --- OPTIONAL GATE -----------------------------------------------------------
 
 def launch_gate(df10, now_et=None):
-    """Opening pause + warmup (always), RVOL (only if REQUIRE_RVOL).
+    """Session window + warmup (always), RVOL (only if REQUIRE_RVOL).
 
     Returns {'passed': bool, 'reason': str, ...}. Fails closed on thin data.
     """
@@ -160,6 +179,12 @@ def launch_gate(df10, now_et=None):
         return {'passed': False, 'volume_ok': False,
                 'reason': f'opening pause: no entries before '
                           f'{ENTRY_START.strftime("%H:%M")} ET '
+                          f'(now {now_et.strftime("%H:%M:%S")})'}
+
+    if now_et.time() >= ENTRY_END:
+        return {'passed': False, 'volume_ok': False,
+                'reason': f'after hours: no entries from '
+                          f'{ENTRY_END.strftime("%H:%M")} ET '
                           f'(now {now_et.strftime("%H:%M:%S")})'}
 
     if df10 is None or len(df10) < WARMUP_BARS:
