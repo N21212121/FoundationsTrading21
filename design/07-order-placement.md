@@ -354,6 +354,46 @@ the body, validated and pinned to the position after `confirm_fill` returns brok
 **never before**, because a ladder attached to an unfilled order is a ladder against a
 position that does not exist.
 
+### 7.1 REVISED 2026-09-28 — two sleeves, never joined
+
+Nate's decisions, which supersede parts of §7 above:
+
+**Combo entries are removed from the manual path and the UI.** An order is options or
+it is commons. The panel is a page, not a dialog, with the chain on one side and the
+commons order on the other, and each side owns its own send — there is no control that
+can place both. `/api/manual/buy` refuses `sleeve='combo'`, and the Dashboard's manual
+trade picker no longer offers it. **The ENGINE is not covered by this**: `engine_ripster`
+and `engine_ripster_tf` still declare `execution = 'options_combo'`, and `_do_entry`
+still fills long entries as calls + shares. That is a separate decision and has not
+been made.
+
+**A strike may now be chosen by hand.** §7 above says the contract is displayed and not
+chosen, because a hand-picked strike is a second sizing rule. The chain view overrules
+that on purpose: a person reading twenty strikes is choosing one. `pick_contract` stays
+the DEFAULT — leaving the chain alone still gets the system's answer, the panel tags
+that row `system pick`, and any other choice is flagged as hand-picked in the preview
+and in the confirmation.
+
+**Limit orders.** `place_share_order` and `place_option_order` take `limit_price=None`,
+which keeps every engine path on market orders exactly as before; only the panel sets
+one. Limits are DAY, so an unfilled one dies at the bell rather than resting overnight
+against a position the engine thinks it knows the size of. A limit is what the preview
+sizes against, because a limit fills at the limit or better while a mid is only what a
+market order hopes for.
+
+**The chain is wider than the picker.** `STRIKES_EACH_WAY = 10` either side of spot,
+scrollable to more, over `CHAIN_DTE_MIN/MAX = 0..60` — deliberately wider than
+`STRIKE_RANGE_PCT` and `DTE_MIN/MAX`, which remain the locked selection spec. Reading
+is not selection, and a person deciding between strikes needs to see past the edge of
+the system's window to know why it stopped there.
+
+**GEX is shown when it is real and named as missing when it is not.** `get_gex` weights
+gamma by open interest, and the indicative feed the chain comes from does not always
+carry open interest. When it does not, every contribution is skipped and the total is a
+confident-looking zero, so the panel prints why instead of drawing it.
+
+---
+
 **Pre-loading** is a saved, named ladder-plus-size template, per ticker, in `config.json`.
 It fills the panel in. It does not send it. A template that sends itself is the arm path.
 

@@ -837,6 +837,34 @@ def _fetch_basket_bars(watch):
     return out
 
 
+# ─── ORDER PANEL (design/07 §7) ────────────────────────────────────────────────
+# The chain the PANEL shows is deliberately wider than the one trade_router
+# PICKS from. Selection is a locked spec (STRIKE_RANGE_PCT, DTE_MIN/MAX);
+# reading is not, and a person deciding between strikes needs to see past the
+# edge of the system's own window to know why it stopped there.
+STRIKES_EACH_WAY = 10        # per Nate, 2026-09-28: ten either side of spot
+CHAIN_RANGE_PCT = 0.15       # over-fetch, then trim to the strike COUNT
+CHAIN_DTE_MIN = 0
+CHAIN_DTE_MAX = 60
+
+
+def _dte_of(expiry):
+    """Calendar days to an ISO expiry. Negative if it is already past."""
+    try:
+        d = datetime.strptime(str(expiry)[:10], '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return 10 ** 6
+    return (d - datetime.now(ET).date()).days
+
+
+def _default_expiry(expiries):
+    """The expiry the panel opens on: the first one trade_router would
+    consider, so the default view matches what the system would trade. Falls
+    back to the nearest available if nothing is in that window."""
+    ok = [e for e in expiries if tr.DTE_MIN <= _dte_of(e) <= tr.DTE_MAX]
+    return ok[0] if ok else expiries[0]
+
+
 # ─── EXIT LADDER (design/07) ────────────────────────────────────────────────────
 
 def _ladder_of(ticker):
@@ -2515,213 +2543,342 @@ def positions():
     return jsonify(pos)
 
 
-@app.route('/api/order/preview', methods=['POST'])
-def order_preview():
-    """What /api/manual/buy WOULD do. Sends nothing. design/07 §7.
+@app.route('/api/order/chain', methods=['POST'])
+def order_chain():
+    """The options chain for the order panel, centred on spot. design/07 §7.
 
-    The panel calls this on every edit, so it must stay read-only and cheap.
-    It plans through the same tr.plan_entry the live path uses rather than
-    reimplementing the sizing, because a preview that computes its own answer
-    is a second sizing rule and will drift from the first one.
+    Direction picks the TYPE and nothing else: calls for a long, puts for a
+    short. That is the trigger's own side, and showing the other one invites
+    taking the opposite trade from the one the card called.
+
+    Strikes come back as a window either side of spot -- STRIKES_EACH_WAY by
+    default -- because a person reading a chain reads outward from the money.
+    A wider `each_way` returns more; the panel asks for more when scrolled.
     """
     body = request.json or {}
     ticker = (body.get('ticker') or '').upper()
     direction = body.get('direction', 'long')
-    sleeve = body.get('sleeve', 'combo')
     if not ticker:
         return jsonify({'ok': False, 'reason': 'no ticker'}), 400
     if not alpaca.is_connected():
         return jsonify({'ok': False, 'reason': 'not connected'}), 400
 
-    cfg = cm.load_config()
     q = alpaca.get_quote(ticker)
     if not q:
         return jsonify({'ok': False, 'reason': 'no quote'}), 400
     spot = q['mid']
+    want = 'call' if direction == 'long' else 'put'
+    each_way = max(1, min(int(body.get('each_way') or STRIKES_EACH_WAY), 60))
+
+    # The strike window has to be a PERCENTAGE because that is what the API
+    # takes, but what the panel asked for is a COUNT. Strike spacing varies by
+    # name and by price, so the percentage is an over-fetch that gets trimmed
+    # to the count below rather than a guess at the right width.
+    pct = float(body.get('range_pct') or CHAIN_RANGE_PCT)
+    chain = alpaca.get_options_chain(ticker, spot, strike_range_pct=pct,
+                                     dte_min=CHAIN_DTE_MIN,
+                                     dte_max=CHAIN_DTE_MAX)
+    rows = [c for c in chain if c['type'] == want]
+    expiries = sorted({c['expiry'] for c in rows})
+    if not expiries:
+        return jsonify({'ok': True, 'ticker': ticker, 'spot': spot,
+                        'type': want, 'expiries': [], 'expiry': None,
+                        'rows': [], 'gex': None,
+                        'gex_note': None,
+                        'note': 'no contracts in range'})
+
+    expiry = body.get('expiry') or _default_expiry(expiries)
+    rows = [c for c in rows if c['expiry'] == expiry]
+    rows.sort(key=lambda c: c['strike'])
+
+    # Trim to each_way strikes either side of spot, keeping the money in view.
+    below = [c for c in rows if c['strike'] <= spot][-each_way:]
+    above = [c for c in rows if c['strike'] > spot][:each_way]
+    window = below + above
+    more = len(below) < len([c for c in rows if c['strike'] <= spot]) or \
+        len(above) < len([c for c in rows if c['strike'] > spot])
+
+    for c in window:
+        c['moneyness'] = round(c['strike'] - spot, 2)
+        c['atm'] = (c is min(window,
+                             key=lambda x: abs(x['strike'] - spot)))
+
+    gex = gex_note = None
+    try:
+        gex = alpaca.get_gex(ticker, spot)
+    except Exception as e:
+        gex_note = f'GEX unavailable: {e}'
+    # GEX is gamma x OPEN INTEREST. The indicative feed the chain comes from
+    # does not always carry open interest, and when it does not, every
+    # contribution is skipped and the total is a confident-looking zero. Say
+    # so instead of drawing it.
+    if gex and not gex.get('n_contracts'):
+        gex, gex_note = None, ('GEX unavailable: the chain returned no open '
+                               'interest, so there is nothing to weight gamma by')
+    elif gex is None and gex_note is None:
+        gex_note = 'GEX unavailable: no chain returned'
+
+    return jsonify({
+        'ok': True, 'ticker': ticker, 'spot': spot, 'type': want,
+        'expiries': expiries, 'expiry': expiry,
+        'rows': window, 'has_more': more, 'each_way': each_way,
+        'gex': gex, 'gex_note': gex_note,
+    })
+
+
+def _panel_plan(body):
+    """Plan one manual order. Shared by the preview and the send.
+
+    Returns (plan, err). err is (payload, status) or None. ONE function so
+    that what the panel showed is what the panel sends: two copies of this
+    arithmetic would be two sizing rules, and they would drift the first time
+    either changed.
+
+    ONE SLEEVE PER ORDER. Combo entries were removed from the manual path on
+    2026-09-28 at Nate's decision: an order is shares or it is options. Two
+    sleeves in one click hid which of them the money went into.
+
+    A CONTRACT MAY BE CHOSEN BY HAND. The first version of this panel
+    displayed trade_router's pick and refused to let it be overridden, on the
+    grounds that a hand-picked strike is a second sizing rule. The chain view
+    changes that deliberately: a person reading twenty strikes is choosing
+    one. pick_contract stays the DEFAULT, so leaving it alone still gets the
+    system's own answer, and a hand pick is marked as one.
+    """
+    ticker = (body.get('ticker') or '').upper()
+    direction = body.get('direction', 'long')
+    sleeve = body.get('sleeve', 'shares')
+    if not ticker:
+        return None, ({'ok': False, 'reason': 'no ticker'}, 400)
+    if sleeve not in ('shares', 'options'):
+        return None, ({'ok': False,
+                       'reason': "sleeve must be 'shares' or 'options'"}, 400)
+    if not alpaca.is_connected():
+        return None, ({'ok': False, 'reason': 'not connected'}, 400)
+
+    cfg = cm.load_config()
+    q = alpaca.get_quote(ticker)
+    if not q:
+        return None, ({'ok': False, 'reason': 'no quote'}, 400)
+    spot = q['mid']
+
+    order_type = body.get('order_type', 'market')
+    limit_price = body.get('limit_price')
+    if order_type == 'limit':
+        try:
+            limit_price = float(limit_price)
+            if limit_price <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, ({'ok': False,
+                           'reason': 'a limit order needs a limit price'}, 400)
+    else:
+        order_type, limit_price = 'market', None
 
     default_budget = _budget_for(ticker, cfg)
     raw = body.get('dollars')
     budget = float(raw) if raw not in (None, '') else default_budget
-    if body.get('shares') not in (None, ''):        # sized in shares instead
-        budget = int(body['shares']) * spot
 
-    warnings = []
-    chain = None
-    if sleeve in ('combo', 'options'):
-        chain = alpaca.get_options_chain(ticker, spot,
-                                         strike_range_pct=tr.STRIKE_RANGE_PCT,
-                                         dte_min=tr.DTE_MIN, dte_max=tr.DTE_MAX)
+    warnings, chosen = [], None
 
     if sleeve == 'shares':
         if direction == 'short':
-            return jsonify({'ok': False, 'reason': 'shares are long-only'}), 400
-        plan = tr._plan_shares_only(direction, budget, spot)
-    elif sleeve == 'options':
-        want = 'call' if direction == 'long' else 'put'
-        c = tr.pick_contract(chain, want, spot)
-        if not c:
-            plan = {'legs': [], 'reason': 'no qualifying contract'}
+            return None, ({'ok': False,
+                           'reason': 'shares are long-only'}, 400)
+        # A limit fills at the limit or better, so it is the honest number to
+        # size and cost against. The mid is only what a market order hopes for.
+        px = limit_price or spot
+        if body.get('shares') not in (None, ''):
+            qty = int(body['shares'])
+            budget = qty * px
         else:
-            split = tr.compute_fill_spill(budget, c['mid'])
-            plan = ({'legs': [tr._option_leg(c, split['contracts'])],
-                     'reason': f"{split['contracts']} contract(s)"}
-                    if split['contracts'] >= 1
-                    else {'legs': [], 'reason': 'budget below one contract'})
+            qty = int(budget // px) if px > 0 else 0
+        plan_legs = ([{'kind': 'shares', 'side': 'buy', 'qty': qty,
+                       'est_price': px, 'limit_price': limit_price}]
+                     if qty >= 1 else [])
+        reason = f'{qty} share(s)' if qty >= 1 else 'budget below one share'
     else:
-        plan = tr.plan_entry(direction, budget, spot, chain)
+        want = 'call' if direction == 'long' else 'put'
+        chain = alpaca.get_options_chain(ticker, spot,
+                                         strike_range_pct=CHAIN_RANGE_PCT,
+                                         dte_min=CHAIN_DTE_MIN,
+                                         dte_max=CHAIN_DTE_MAX)
+        default_c = tr.pick_contract(
+            [c for c in chain
+             if tr.DTE_MIN <= _dte_of(c['expiry']) <= tr.DTE_MAX], want, spot)
+        wanted_sym = body.get('contract_symbol')
+        if wanted_sym:
+            chosen = next((c for c in chain if c['symbol'] == wanted_sym), None)
+            if not chosen:
+                return None, ({'ok': False,
+                               'reason': 'that contract is no longer quoted'},
+                              400)
+            if chosen['type'] != want:
+                return None, ({'ok': False,
+                               'reason': f'a {direction} takes {want}s'}, 400)
+        else:
+            chosen = default_c
+
+        if not chosen:
+            plan_legs, reason = [], 'no qualifying contract'
+        else:
+            px = limit_price or chosen['mid']
+            if body.get('contracts') not in (None, ''):
+                n = int(body['contracts'])
+                budget = n * px * 100
+            else:
+                n = tr.compute_fill_spill(budget, px)['contracts']
+            plan_legs = ([{'kind': 'option', 'side': 'buy',
+                           'symbol': chosen['symbol'], 'contracts': n,
+                           'est_premium': px, 'strike': chosen['strike'],
+                           'expiry': chosen['expiry'], 'type': chosen['type'],
+                           'limit_price': limit_price}]
+                         if n >= 1 else [])
+            reason = (f'{n} contract(s)' if n >= 1
+                      else 'budget below one contract')
+            if default_c and chosen['symbol'] != default_c['symbol']:
+                warnings.append(
+                    f"Hand-picked strike: trade_router would have taken "
+                    f"{default_c['strike']} exp {default_c['expiry']}.")
+            if (chosen.get('spread_pct') or 0) > 10:
+                warnings.append(
+                    f"Wide spread: {chosen['spread_pct']:.0f}% of mid.")
 
     legs, cash = [], 0.0
-    for leg in plan['legs']:
-        if leg['kind'] == 'option':
-            cost = leg['contracts'] * leg['est_premium'] * 100
-            legs.append({**leg, 'est_cost': round(cost, 2)})
-        else:
-            cost = leg['qty'] * leg['est_price']
-            legs.append({**leg, 'est_cost': round(cost, 2)})
+    for leg in plan_legs:
+        cost = (leg['contracts'] * leg['est_premium'] * 100
+                if leg['kind'] == 'option' else leg['qty'] * leg['est_price'])
+        legs.append({**leg, 'est_cost': round(cost, 2)})
         cash += cost
 
-    # The contract is DISPLAYED, never chosen here: trade_router's locked spec
-    # picks it, and a hand-picked strike would be a second sizing rule.
-    contract = next((l for l in legs if l['kind'] == 'option'), None)
+    return {
+        'ticker': ticker, 'direction': direction, 'sleeve': sleeve,
+        'quote': q, 'spot': spot, 'cfg': cfg,
+        'order_type': order_type, 'limit_price': limit_price,
+        'budget': budget, 'default_budget': default_budget,
+        'legs': legs, 'contract': chosen, 'est_cash': cash,
+        'plan_reason': reason, 'warnings': warnings,
+    }, None
 
-    atr = _atr_at_fill(ticker)
+
+@app.route('/api/order/preview', methods=['POST'])
+def order_preview():
+    """What /api/manual/buy WOULD do. Sends nothing. design/07 §7.
+
+    Called on every edit in the panel, so it stays read-only and cheap.
+    """
+    body = request.json or {}
+    p, err = _panel_plan(body)
+    if err:
+        return jsonify(err[0]), err[1]
+
+    warnings = list(p['warnings'])
+    atr = _atr_at_fill(p['ticker'])
+    sleeve, legs = p['sleeve'], p['legs']
+
     ladder_spec = body.get('ladder')
     ladder, ladder_error, ladder_words, rungs_out = None, None, None, []
     if ladder_spec:
-        lsleeve = ladder_spec.get('sleeve') or (
-            sleeve if sleeve in ('shares', 'options') else None)
         held = 0
         for l in legs:
-            if lsleeve == 'options' and l['kind'] == 'option':
+            if sleeve == 'options' and l['kind'] == 'option':
                 held = l['contracts']
-            elif lsleeve == 'shares' and l['kind'] == 'shares':
+            elif sleeve == 'shares' and l['kind'] == 'shares':
                 held = l['qty']
         if not held:
-            ladder_error = f'no {lsleeve or "?"} leg to ladder at this size'
+            ladder_error = f'no {sleeve} leg to ladder at this size'
         else:
             ladder, ladder_error = _ladder_from_spec(
-                ladder_spec, ticker=ticker, sleeve=lsleeve, anchor=spot,
-                qty=held, atr=atr)
+                {**ladder_spec, 'sleeve': sleeve}, ticker=p['ticker'],
+                sleeve=sleeve, anchor=p['spot'], qty=held, atr=atr)
         if ladder:
-            ladder_words = el.describe(ladder, direction)
+            ladder_words = el.describe(ladder, p['direction'])
             for r in ladder['rungs']:
-                rungs_out.append({**r,
-                                  'price': round(el.rung_price(r, ladder,
-                                                               direction), 2)})
-            if lsleeve == 'options':
+                rungs_out.append(
+                    {**r, 'price': round(el.rung_price(r, ladder,
+                                                       p['direction']), 2)})
+            if sleeve == 'options':
                 warnings.append(
                     'The backtester models shares only, so an options ladder '
                     'is not refereeable by it (design/07 §6.1).')
 
     if atr is None:
         warnings.append('No daily ATR available; ATR-keyed rungs will refuse.')
-    if not plan['legs']:
-        warnings.append(plan['reason'])
+    if not legs:
+        warnings.append(p['plan_reason'])
     if ladder_spec and not _engine_enabled:
         # _run_ladder is gated on the same switch, so a ladder attached while
-        # the app is OBSERVE ONLY is stored and never evaluated. Saying so in
-        # the panel is the difference between a decision and a silent no-op.
+        # the app is OBSERVE ONLY is stored and never evaluated. Saying so is
+        # the difference between a decision and a silent no-op.
         warnings.append('Engine is OBSERVE ONLY, so this ladder will be '
                         'stored but never evaluated until the engine is on.')
 
+    q = p['quote']
     return jsonify({
         'ok': True,
-        'ticker': ticker, 'direction': direction, 'sleeve': sleeve,
-        'quote': {'bid': q.get('bid'), 'ask': q.get('ask'), 'mid': spot},
+        'ticker': p['ticker'], 'direction': p['direction'], 'sleeve': sleeve,
+        'quote': {'bid': q.get('bid'), 'ask': q.get('ask'), 'mid': p['spot']},
         'atr': round(atr, 4) if atr is not None else None,
-        'budget': round(budget, 2),
-        'default_budget': round(default_budget, 2),
+        'budget': round(p['budget'], 2),
+        'default_budget': round(p['default_budget'], 2),
         'default_allocation_pct': next(
             (float(w.get('allocation_pct', 0))
-             for w in cfg.get('watchlist', [])
-             if w['ticker'].upper() == ticker), None),
-        'legs': legs,
-        'contract': contract,
-        'est_cash': round(cash, 2),
-        'unspent': round(budget - cash, 2),
-        'plan_reason': plan['reason'],
-        'ladder': ladder,
-        'ladder_rungs': rungs_out,
-        'ladder_describes': ladder_words,
-        'ladder_error': ladder_error,
+             for w in p['cfg'].get('watchlist', [])
+             if w['ticker'].upper() == p['ticker']), None),
+        'order_type': p['order_type'], 'limit_price': p['limit_price'],
+        'legs': legs, 'contract': p['contract'],
+        'est_cash': round(p['est_cash'], 2),
+        'unspent': round(p['budget'] - p['est_cash'], 2),
+        'plan_reason': p['plan_reason'],
+        'ladder': ladder, 'ladder_rungs': rungs_out,
+        'ladder_describes': ladder_words, 'ladder_error': ladder_error,
         'warnings': warnings,
     })
 
 
 @app.route('/api/manual/buy', methods=['POST'])
 def manual_buy():
+    """Place one manual entry, on ONE sleeve. design/07 §7.
+
+    Plans through _panel_plan, the same function the preview renders, so the
+    order that goes out is the order that was shown.
+    """
     body = request.json or {}
-    ticker = (body.get('ticker') or '').upper()
-    direction = body.get('direction', 'long')
-    sleeve = body.get('sleeve', 'combo')      # combo | shares | options
-    if not ticker:
-        return jsonify({'ok': False, 'reason': 'no ticker'}), 400
-    if not alpaca.is_connected():
-        return jsonify({'ok': False, 'reason': 'not connected'}), 400
-    cfg = cm.load_config()
-    ladder_spec = body.get('ladder')
+    p, err = _panel_plan(body)
+    if err:
+        return jsonify(err[0]), err[1]
+    if not p['legs']:
+        return jsonify({'ok': False, 'reason': p['plan_reason']}), 400
 
-    if sleeve == 'combo':
-        r = _do_entry(ticker, direction, cfg, source='manual')
-        if ladder_spec and r.get('ok'):
-            r['ladder'] = _attach_ladder(ticker, direction, ladder_spec)
-        return jsonify(r)
+    ticker, direction = p['ticker'], p['direction']
+    kind = 'limit' if p['limit_price'] else 'market'
+    result = tr.execute_plan(alpaca, ticker, p['legs'],
+                             reason=f"manual {p['sleeve']} ({kind})")
 
-    # single-sleeve manual entries
-    q = alpaca.get_quote(ticker)
-    if not q:
-        return jsonify({'ok': False, 'reason': 'no quote'}), 400
-    budget = float(body.get('dollars') or _budget_for(ticker, cfg))
-    if budget <= 0:
-        return jsonify({'ok': False, 'reason': 'no budget'}), 400
-
-    legs = []
-    if sleeve == 'shares':
-        if direction == 'short':
-            return jsonify({'ok': False, 'reason': 'shares are long-only'}), 400
-        qty = int(budget // q['mid'])
-        if qty < 1:
-            return jsonify({'ok': False, 'reason': 'budget below one share'}), 400
-        legs = [{'kind': 'shares', 'side': 'buy', 'qty': qty,
-                 'est_price': q['mid']}]
-    elif sleeve == 'options':
-        chain = alpaca.get_options_chain(ticker, q['mid'],
-                                         strike_range_pct=tr.STRIKE_RANGE_PCT,
-                                         dte_min=tr.DTE_MIN, dte_max=tr.DTE_MAX)
-        want = 'call' if direction == 'long' else 'put'
-        c = tr.pick_contract(chain, want, q['mid'])
-        if not c:
-            return jsonify({'ok': False, 'reason': 'no qualifying contract'}), 400
-        split = tr.compute_fill_spill(budget, c['mid'])
-        if split['contracts'] < 1:
-            return jsonify({'ok': False,
-                            'reason': 'budget below one contract'}), 400
-        legs = [{'kind': 'option', 'side': 'buy', 'symbol': c['symbol'],
-                 'contracts': split['contracts'], 'est_premium': c['mid'],
-                 'strike': c['strike'], 'expiry': c['expiry'],
-                 'type': c['type']}]
-
-    result = tr.execute_plan(alpaca, ticker, legs, reason='manual single-sleeve')
-    # update position state
     pos = _positions()
-    p = pos.get(ticker, {'ticker': ticker, 'direction': direction,
-                         'opened_at': datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')})
+    entry = {'ticker': ticker, 'direction': direction,
+             'opened_at': datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S')}
+    pp = pos.get(ticker, entry)
     for f in result['filled']:
         leg = f['leg']
         if leg['kind'] == 'option':
-            p['option_symbol'] = leg['symbol']
-            p['option_contracts'] = p.get('option_contracts', 0) + leg['contracts']
-            p['option_entry_premium'] = leg['est_premium']
-            p['option_type'] = leg['type']
+            pp['option_symbol'] = leg['symbol']
+            pp['option_contracts'] = (pp.get('option_contracts', 0)
+                                      + leg['contracts'])
+            pp['option_entry_premium'] = leg['est_premium']
+            pp['option_type'] = leg['type']
         else:
-            p['shares'] = p.get('shares', 0) + leg['qty']
-            p['share_entry_price'] = leg['est_price']
-    pos[ticker] = p
+            pp['shares'] = pp.get('shares', 0) + leg['qty']
+            pp['share_entry_price'] = leg['est_price']
+    pos[ticker] = pp
     _save_positions(pos)
+
     out = {'ok': True, 'filled': len(result['filled']),
-           'failed': len(result['failed'])}
+           'failed': len(result['failed']), 'order_type': kind}
+    ladder_spec = body.get('ladder')
     if ladder_spec and result['filled']:
-        out['ladder'] = _attach_ladder(ticker, direction, ladder_spec)
+        out['ladder'] = _attach_ladder(
+            ticker, direction, {**ladder_spec, 'sleeve': p['sleeve']})
     return jsonify(out)
 
 

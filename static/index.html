@@ -450,80 +450,156 @@
                  font-weight: 600; background: #fdf7dd; }
 
   /* ── Order panel (design/07 §7) ───────────────────────────────────────
-     Its own overlay rather than appConfirm's, because this one is a FORM:
-     it stays open while the person edits, re-previews on every change, and
-     only at the end hands off to appConfirm like every other warning does.
+     A PAGE, not a dialog: it fills most of the viewport because it holds two
+     order forms and a twenty-row chain, and a box that scrolls internally at
+     dialog size makes a person read strikes through a letterbox.
 
-     The ladder block is collapsed and unchecked on open. That is not a
-     styling preference -- §6.1 measured the scale-out raising the win rate
-     while losing money, so the evidence does not support turning it on, and
-     a panel that opens with it armed would be arguing the opposite. */
+     TWO SIDES, NEVER JOINED. Combo entries were removed on 2026-09-28: an
+     order is options or it is commons. The layout is the rule -- there is no
+     control anywhere that sends both, because each side owns its own send.
+
+     The ladder blocks open closed and unchecked. §6.1 measured the scale-out
+     raising the win rate while losing money, so a panel that opened with it
+     armed would be arguing against its own evidence. */
   #ordBack {
-    position:fixed; inset:0; background:rgba(11,31,59,.45);
+    position:fixed; inset:0; background:rgba(11,31,59,.5);
     display:none; align-items:center; justify-content:center; z-index:60;
   }
   #ordBack.show { display:flex; }
   #ordBox {
-    background:var(--card); border:1px solid var(--border); border-radius:9px;
-    width:min(700px,94vw); max-height:92vh; overflow:auto; padding:15px 18px;
-    box-shadow:0 14px 44px rgba(11,31,59,.3);
+    background:var(--bg); border:1px solid var(--border); border-radius:10px;
+    width:86vw; height:84vh; display:flex; flex-direction:column;
+    padding:0; box-shadow:0 18px 60px rgba(11,31,59,.34); overflow:hidden;
   }
-  #ordBox h3 { margin:0 0 2px; font-size:17px; }
-  .ordSub { font-size:11.5px; color:var(--text-dim); margin-bottom:11px; }
+  #ordHead {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:11px 16px; border-bottom:1px solid var(--border);
+    background:var(--card);
+  }
+  #ordHead h3 { margin:0; font-size:18px; }
+  #ordHeadStats {
+    margin-left:auto; display:flex; gap:14px; align-items:baseline;
+    font-size:12px; color:var(--text-dim); font-variant-numeric:tabular-nums;
+  }
+  #ordHeadStats b { color:var(--text); font-size:15px; }
+  #ordClose {
+    border:1px solid var(--border); background:var(--card-2); cursor:pointer;
+    border-radius:5px; font-size:15px; line-height:1; padding:4px 9px;
+    color:var(--text-dim);
+  }
+  #ordCols {
+    flex:1; display:grid; grid-template-columns:1.25fr 1fr; gap:0;
+    min-height:0;
+  }
+  .ordCol {
+    display:flex; flex-direction:column; min-height:0; min-width:0;
+    padding:12px 16px; overflow:auto;
+  }
+  .ordCol + .ordCol { border-left:1px solid var(--border); }
+  .ordColHead {
+    display:flex; align-items:baseline; gap:8px; margin-bottom:9px;
+  }
+  .ordColHead h4 { margin:0; font-size:14px; }
+  .ordColHead .ordHint { font-size:11px; color:var(--text-dim); }
+
+  /* the chain */
+  #ordChainWrap {
+    border:1px solid var(--border); border-radius:7px; overflow:auto;
+    background:var(--card); max-height:46vh; min-height:120px;
+  }
+  table.ordChain { width:100%; border-collapse:collapse; font-size:12px; }
+  table.ordChain th {
+    position:sticky; top:0; background:var(--card-2); z-index:1;
+    font-size:10px; text-transform:uppercase; letter-spacing:.5px;
+    color:var(--text-dim); padding:5px 7px; text-align:right;
+    border-bottom:1px solid var(--border); font-weight:700;
+  }
+  table.ordChain th:first-child, table.ordChain td:first-child {
+    text-align:left;
+  }
+  table.ordChain td {
+    padding:4px 7px; text-align:right; border-bottom:1px solid var(--border);
+    font-variant-numeric:tabular-nums; cursor:pointer;
+  }
+  table.ordChain tr:hover td { background:var(--card-2); }
+  table.ordChain tr.ordSel td {
+    background:#e8eefc; box-shadow:inset 3px 0 0 0 var(--royal);
+  }
+  /* The at-the-money row is a reading aid, not a recommendation: it marks
+     where spot is so the eye can find the money without hunting. */
+  table.ordChain tr.ordAtm td { font-weight:700; }
+  table.ordChain tr.ordAtm td:first-child::after {
+    content:' ·'; color:var(--royal);
+  }
+  .ordPick {
+    display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.4px;
+    text-transform:uppercase; background:var(--card-2); color:var(--text-dim);
+    border-radius:9px; padding:1px 6px; margin-left:5px;
+  }
+  #ordGex {
+    font-size:11px; color:var(--text-dim); margin-top:6px; line-height:1.45;
+  }
+
+  /* forms */
   .ordGrid {
-    display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr));
-    gap:9px; margin-bottom:11px;
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
+    gap:8px; margin:10px 0;
   }
   .ordField { display:flex; flex-direction:column; gap:3px; }
   .ordField label {
-    font-size:10.5px; text-transform:uppercase; letter-spacing:.5px;
-    color:var(--text-dim); font-weight:600;
+    font-size:10px; text-transform:uppercase; letter-spacing:.5px;
+    color:var(--text-dim); font-weight:700;
   }
   .ordField input, .ordField select {
     padding:6px 7px; border:1px solid var(--border); border-radius:5px;
-    background:var(--bg); color:var(--text); font-size:13px; width:100%;
+    background:var(--card); color:var(--text); font-size:13px; width:100%;
     font-variant-numeric:tabular-nums;
   }
   .ordSec {
-    border:1px solid var(--border); border-radius:7px; padding:10px 11px;
-    margin-bottom:11px; background:var(--card-2);
+    border:1px solid var(--border); border-radius:7px; padding:9px 10px;
+    margin-top:10px; background:var(--card);
   }
-  .ordSec > .ordSecHead {
+  .ordSecHead {
     display:flex; align-items:center; gap:7px; font-size:12.5px;
-    font-weight:600; margin-bottom:2px;
+    font-weight:600;
   }
-  .ordNote { font-size:11px; color:var(--text-dim); line-height:1.45; }
+  .ordNote { font-size:10.5px; color:var(--text-dim); line-height:1.45; }
   .ordRung {
-    display:grid; grid-template-columns:70px 92px 1fr 30px; gap:7px;
-    align-items:center; margin-top:7px;
+    display:grid; grid-template-columns:62px 88px 1fr 28px; gap:6px;
+    align-items:center; margin-top:6px;
   }
   .ordRung input, .ordRung select {
-    padding:5px 6px; border:1px solid var(--border); border-radius:5px;
-    background:var(--card); color:var(--text); font-size:12.5px; width:100%;
+    padding:4px 6px; border:1px solid var(--border); border-radius:5px;
+    background:var(--bg); color:var(--text); font-size:12px; width:100%;
   }
-  .ordRungAt { font-size:11px; color:var(--text-dim); }
   .ordX {
-    border:1px solid var(--border); background:var(--card); border-radius:5px;
-    cursor:pointer; color:var(--text-dim); font-size:13px; line-height:1;
-    padding:5px 0;
+    border:1px solid var(--border); background:var(--bg); border-radius:5px;
+    cursor:pointer; color:var(--text-dim); font-size:13px; padding:4px 0;
   }
-  #ordPreview { font-size:12.5px; line-height:1.55; }
-  #ordPreview .ordLeg { display:flex; justify-content:space-between; gap:10px; }
-  #ordPreview .ordBig {
-    font-size:19px; font-weight:700; font-variant-numeric:tabular-nums;
+  .ordPv {
+    margin-top:10px; border-top:1px solid var(--border); padding-top:9px;
+    font-size:12px; line-height:1.5;
+  }
+  .ordPv .ordLeg { display:flex; justify-content:space-between; gap:10px; }
+  .ordPv .ordBig {
+    font-size:18px; font-weight:700; font-variant-numeric:tabular-nums;
   }
   .ordWarn {
-    border-left:3px solid var(--trigger-edge); padding:5px 0 5px 8px;
-    margin-top:7px; font-size:11.5px; color:var(--text);
+    border-left:3px solid var(--trigger-edge); padding:4px 0 4px 8px;
+    margin-top:6px; font-size:11px;
   }
   .ordErr {
-    border-left:3px solid var(--red); padding:5px 0 5px 8px; margin-top:7px;
-    font-size:11.5px; color:var(--red);
+    border-left:3px solid var(--red); padding:4px 0 4px 8px; margin-top:6px;
+    font-size:11px; color:var(--red);
   }
-  #ordBtns { display:flex; gap:8px; justify-content:flex-end; margin-top:13px; }
-  #ordSend { background:var(--scarlet); color:var(--navy); font-weight:600; }
-  /* The card's own order button. Small and quiet: the card's job is still to
-     say what is happening, not to sell an order. */
+  .ordSend {
+    width:100%; margin-top:10px; padding:9px; border-radius:6px;
+    border:1px solid var(--border); background:var(--scarlet);
+    color:var(--navy); font-weight:700; font-size:13px; cursor:pointer;
+  }
+  .ordSend[disabled] {
+    background:var(--card-2); color:var(--text-dim); cursor:not-allowed;
+  }
   .ordBtn {
     border:1px solid var(--border); background:var(--card); border-radius:5px;
     font-size:10.5px; font-weight:700; text-transform:uppercase;
@@ -531,6 +607,7 @@
     padding:2px 7px; margin-left:4px;
   }
   .ordBtn:hover { color:var(--text); border-color:var(--navy); }
+
 
   /* ── Standardized modal: ALL confirmations route through this ── */
   #modalBack {
@@ -632,7 +709,6 @@
         <option value="short">Short</option>
       </select>
       <select id="tSleeve">
-        <option value="combo">Combo</option>
         <option value="shares">Shares only</option>
         <option value="options">Options only</option>
       </select>
@@ -1452,90 +1528,187 @@
 <!-- order panel (design/07 §7) -->
 <div id="ordBack">
   <div id="ordBox">
-    <h3 id="ordTitle">Place order</h3>
-    <div class="ordSub" id="ordAnchor"></div>
-
-    <div class="ordGrid">
-      <div class="ordField">
-        <label>Direction</label>
-        <select id="ordDir" onchange="ordChanged()">
-          <option value="long">long</option>
-          <option value="short">short</option>
-        </select>
-      </div>
-      <div class="ordField">
-        <label>Sleeve</label>
-        <select id="ordSleeve" onchange="ordChanged()">
-          <option value="combo">combo</option>
-          <option value="shares">shares</option>
-          <option value="options">options</option>
-        </select>
-      </div>
-      <div class="ordField">
-        <label>Size</label>
-        <input id="ordSize" type="number" step="1" min="0"
-               oninput="ordChanged()">
-      </div>
-      <div class="ordField">
-        <label>Unit</label>
-        <select id="ordUnit" onchange="ordChanged()">
-          <option value="dollars">dollars</option>
-          <option value="shares">shares</option>
-        </select>
-      </div>
+    <div id="ordHead">
+      <h3 id="ordTitle">Place order</h3>
+      <select id="ordDir" onchange="ordDirChanged()"
+              style="padding:4px 7px;border:1px solid var(--border);
+                     border-radius:5px;background:var(--bg);
+                     color:var(--text);font-size:12px;">
+        <option value="long">long</option>
+        <option value="short">short</option>
+      </select>
+      <span id="ordAnchor" style="font-size:11.5px;color:var(--text-dim);"></span>
+      <div id="ordHeadStats"></div>
+      <button id="ordClose" onclick="ordClose()" title="close">×</button>
     </div>
 
-    <div class="ordSec">
-      <div class="ordSecHead">
-        <input id="ordLadderOn" type="checkbox" onchange="ordLadderToggled()">
-        <label for="ordLadderOn" style="cursor:pointer;">Exit ladder</label>
-        <span id="ordLadderSleeve" style="margin-left:auto;font-weight:400;
-              font-size:11px;color:var(--text-dim);"></span>
-      </div>
-      <div class="ordNote">
-        Off by default. The sweep in design/07 §6.1 found the scale-out
-        raising the win rate from 28.7% to 43.6% while P&amp;L fell from
-        &minus;207 to &minus;354, and the ratchet firing without paying.
-        Rungs belong at 0.1&ndash;0.5 ATR: only 3 of 209 trades travelled a
-        full one.
-      </div>
-      <div id="ordLadderBody" style="display:none;margin-top:9px;">
-        <div id="ordRungs"></div>
-        <button class="ordBtn" style="margin:9px 0 0;"
-                onclick="ordAddRung()">+ rung</button>
-        <div class="ordGrid" style="margin:10px 0 0;">
+    <div id="ordCols">
+      <!-- ── options ── -->
+      <div class="ordCol">
+        <div class="ordColHead">
+          <h4 id="ordOptTitle">Options</h4>
+          <span class="ordHint" id="ordOptHint"></span>
+          <span style="margin-left:auto;">
+            <select id="ordExpiry" onchange="ordLoadChain()"
+                    style="padding:3px 6px;border:1px solid var(--border);
+                           border-radius:5px;background:var(--card);
+                           color:var(--text);font-size:11.5px;"></select>
+          </span>
+        </div>
+        <div id="ordChainWrap">
+          <table class="ordChain">
+            <thead><tr>
+              <th>Strike</th><th>Bid</th><th>Ask</th><th>Mid</th>
+              <th>Δ</th><th>Γ</th><th>IV</th><th>OI</th>
+            </tr></thead>
+            <tbody id="ordChainBody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+          <button class="ordBtn" onclick="ordMoreStrikes()"
+                  id="ordMoreBtn">show more strikes</button>
+          <span class="ordHint" id="ordChainNote"
+                style="font-size:11px;color:var(--text-dim);"></span>
+        </div>
+        <div id="ordGex"></div>
+
+        <div class="ordGrid">
           <div class="ordField">
-            <label>Ratchet</label>
-            <select id="ordRatchet" onchange="ordChanged()">
-              <option value="off">off</option>
-              <option value="on">on</option>
+            <label>Size</label>
+            <input id="ordOptSize" type="number" min="0" step="1"
+                   placeholder="watchlist default"
+                   oninput="ordTouched('opt')">
+          </div>
+          <div class="ordField">
+            <label>Unit</label>
+            <select id="ordOptUnit" onchange="ordTouched('opt')">
+              <option value="dollars">dollars</option>
+              <option value="contracts">contracts</option>
             </select>
           </div>
           <div class="ordField">
-            <label>Ratchet ATR</label>
-            <input id="ordRatchetMult" type="number" step="0.05" min="0.05"
-                   value="0.5" oninput="ordChanged()">
+            <label>Order</label>
+            <select id="ordOptType" onchange="ordTouched('opt')">
+              <option value="market">market</option>
+              <option value="limit">limit</option>
+            </select>
           </div>
           <div class="ordField">
-            <label>Remainder</label>
-            <select id="ordRemainder" onchange="ordChanged()">
-              <option value="engine">engine exits it</option>
-              <option value="ratchet">ratchet exits it</option>
-            </select>
+            <label>Limit (premium)</label>
+            <input id="ordOptLimit" type="number" min="0" step="0.01"
+                   oninput="ordTouched('opt')" disabled>
           </div>
         </div>
-      </div>
-    </div>
 
-    <div class="ordSec" style="background:var(--card);">
-      <div id="ordPreview">
-        <span style="color:var(--text-dim);">Loading preview…</span>
-      </div>
-    </div>
+        <div class="ordSec">
+          <div class="ordSecHead">
+            <input id="ordOptLadderOn" type="checkbox"
+                   onchange="ordLadderToggled('opt')">
+            <label for="ordOptLadderOn" style="cursor:pointer;">Exit ladder</label>
+          </div>
+          <div class="ordNote">
+            Off by default. §6.1 found the scale-out raising the win rate
+            28.7%&rarr;43.6% while P&amp;L fell &minus;207&rarr;&minus;354.
+            The backtester models shares only, so an options ladder cannot be
+            refereed by it at all.
+          </div>
+          <div id="ordOptLadderBody" style="display:none;margin-top:8px;">
+            <div id="ordOptRungs"></div>
+            <button class="ordBtn" style="margin-top:8px;"
+                    onclick="ordAddRung('opt')">+ rung</button>
+            <div class="ordGrid">
+              <div class="ordField"><label>Ratchet</label>
+                <select id="ordOptRatchet" onchange="ordTouched('opt')">
+                  <option value="off">off</option><option value="on">on</option>
+                </select></div>
+              <div class="ordField"><label>Ratchet ATR</label>
+                <input id="ordOptRatchetMult" type="number" step="0.05"
+                       min="0.05" value="0.5" oninput="ordTouched('opt')"></div>
+              <div class="ordField"><label>Remainder</label>
+                <select id="ordOptRemainder" onchange="ordTouched('opt')">
+                  <option value="engine">engine exits it</option>
+                  <option value="ratchet">ratchet exits it</option>
+                </select></div>
+            </div>
+          </div>
+        </div>
 
-    <div id="ordBtns">
-      <button onclick="ordClose()">Cancel</button>
-      <button id="ordSend" onclick="ordSend()">Review and send</button>
+        <div class="ordPv" id="ordOptPv"></div>
+        <button class="ordSend" id="ordOptSend"
+                onclick="ordSend('opt')">Review and send options</button>
+      </div>
+
+      <!-- ── commons ── -->
+      <div class="ordCol">
+        <div class="ordColHead">
+          <h4>Commons</h4>
+          <span class="ordHint">shares of the underlying</span>
+        </div>
+        <div class="ordGrid">
+          <div class="ordField">
+            <label>Size</label>
+            <input id="ordShrSize" type="number" min="0" step="1"
+                   placeholder="watchlist default"
+                   oninput="ordTouched('shr')">
+          </div>
+          <div class="ordField">
+            <label>Unit</label>
+            <select id="ordShrUnit" onchange="ordTouched('shr')">
+              <option value="dollars">dollars</option>
+              <option value="shares">shares</option>
+            </select>
+          </div>
+          <div class="ordField">
+            <label>Order</label>
+            <select id="ordShrType" onchange="ordTouched('shr')">
+              <option value="market">market</option>
+              <option value="limit">limit</option>
+            </select>
+          </div>
+          <div class="ordField">
+            <label>Limit (price)</label>
+            <input id="ordShrLimit" type="number" min="0" step="0.01"
+                   oninput="ordTouched('shr')" disabled>
+          </div>
+        </div>
+
+        <div class="ordSec">
+          <div class="ordSecHead">
+            <input id="ordShrLadderOn" type="checkbox"
+                   onchange="ordLadderToggled('shr')">
+            <label for="ordShrLadderOn" style="cursor:pointer;">Exit ladder</label>
+          </div>
+          <div class="ordNote">
+            Off by default. §6.1: the scale-out raised the win rate
+            28.7%&rarr;43.6% while P&amp;L fell &minus;207&rarr;&minus;354, and
+            the ratchet fired without paying. Rungs belong at 0.1&ndash;0.5 ATR
+            &mdash; only 3 of 209 trades travelled a full one.
+          </div>
+          <div id="ordShrLadderBody" style="display:none;margin-top:8px;">
+            <div id="ordShrRungs"></div>
+            <button class="ordBtn" style="margin-top:8px;"
+                    onclick="ordAddRung('shr')">+ rung</button>
+            <div class="ordGrid">
+              <div class="ordField"><label>Ratchet</label>
+                <select id="ordShrRatchet" onchange="ordTouched('shr')">
+                  <option value="off">off</option><option value="on">on</option>
+                </select></div>
+              <div class="ordField"><label>Ratchet ATR</label>
+                <input id="ordShrRatchetMult" type="number" step="0.05"
+                       min="0.05" value="0.5" oninput="ordTouched('shr')"></div>
+              <div class="ordField"><label>Remainder</label>
+                <select id="ordShrRemainder" onchange="ordTouched('shr')">
+                  <option value="engine">engine exits it</option>
+                  <option value="ratchet">ratchet exits it</option>
+                </select></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ordPv" id="ordShrPv"></div>
+        <button class="ordSend" id="ordShrSend"
+                onclick="ordSend('shr')">Review and send shares</button>
+      </div>
     </div>
   </div>
 </div>
@@ -5453,245 +5626,367 @@ async function bulkDelete() {
 }
 
 /* ── Order panel (design/07 §7) ─────────────────────────────────────────────
-   Every edit re-previews against /api/order/preview, which plans through the
-   same tr.plan_entry the live path uses. Nothing here computes a size of its
-   own: a panel that did its own arithmetic would be a second sizing rule and
-   would drift from the first one the day either changed.
+   TWO SIDES, NEVER JOINED. Combo entries were removed on 2026-09-28: an order
+   is options or it is commons. Each side has its own size, its own order type,
+   its own ladder and its own send, so there is no control that can place both.
 
-   Sending is two steps on purpose -- preview, then appConfirm -- because this
-   is the one surface in the app that opens a position by hand. */
-const ORD = {ticker: null, anchor: null, rungs: [], seq: 0, timer: null,
-             last: null, sending: false};
+   Every edit re-previews against /api/order/preview, which plans through the
+   same _panel_plan the send uses. Nothing here does its own arithmetic: a
+   panel that computed its own size would be a second sizing rule and would
+   drift from the real one the day either changed. */
+const ORD = {
+  ticker: null, anchor: null, chain: null, eachWay: 10, sel: null,
+  rungs: {opt: [], shr: []}, pv: {opt: null, shr: null},
+  seq: {opt: 0, shr: 0}, timer: {opt: null, shr: null}, sending: null,
+};
+const ORD_ID = {opt: 'Opt', shr: 'Shr'};
+const ORD_SLEEVE = {opt: 'options', shr: 'shares'};
+
+function ordF(side, name) { return $('ord' + ORD_ID[side] + name); }
 
 function ordOpen(ticker) {
   const x = (SCR.rows || {})[ticker] || {};
   ORD.ticker = ticker;
   ORD.anchor = (x.closest && x.closest.price != null) ? x.closest.price : null;
-  ORD.rungs = [];
-  ORD.last = null;
-  ORD.sending = false;
+  ORD.chain = null; ORD.sel = null; ORD.eachWay = 10;
+  ORD.rungs = {opt: [], shr: []};
+  ORD.pv = {opt: null, shr: null};
+  ORD.sending = null;
 
-  $('ordTitle').textContent = `Place order — ${ticker}`;
+  $('ordTitle').textContent = ticker;
+  $('ordDir').value = x.direction === 'short' ? 'short' : 'long';
   const cl = x.closest || {};
   $('ordAnchor').innerHTML = cl.name
-    ? `Working off <b>${cl.name}</b> at ${moneyFull(cl.price)}` +
-      (cl.distance_atr != null
-        ? ` · ${cl.distance_atr.toFixed(2)} ATR away` : '') +
+    ? `off <b>${cl.name}</b> ${moneyFull(cl.price)}` +
+      (cl.distance_atr != null ? ` · ${cl.distance_atr.toFixed(2)} ATR` : '') +
       (x.trigger && x.trigger !== 'none' ? ` · ${x.trigger}` : '')
-    : 'No level on the card; size and rungs start empty.';
+    : 'no level on the card';
 
-  $('ordDir').value = x.direction === 'short' ? 'short' : 'long';
-  $('ordSleeve').value = 'combo';
-  $('ordUnit').value = 'dollars';
-  $('ordSize').value = '';
-  $('ordSize').placeholder = 'watchlist default';
-  $('ordLadderOn').checked = false;
-  $('ordLadderBody').style.display = 'none';
-  $('ordRatchet').value = 'off';
-  $('ordRatchetMult').value = '0.5';
-  $('ordRemainder').value = 'engine';
-  $('ordRungs').innerHTML = '';
-  $('ordPreview').innerHTML =
-    '<span style="color:var(--text-dim);">Loading preview…</span>';
+  for (const s of ['opt', 'shr']) {
+    ordF(s, 'Size').value = '';
+    ordF(s, 'Type').value = 'market';
+    ordF(s, 'Limit').value = '';
+    ordF(s, 'Limit').disabled = true;
+    ordF(s, 'LadderOn').checked = false;
+    ordF(s, 'LadderBody').style.display = 'none';
+    ordF(s, 'Ratchet').value = 'off';
+    ordF(s, 'RatchetMult').value = '0.5';
+    ordF(s, 'Remainder').value = 'engine';
+    ordF(s, 'Rungs').innerHTML = '';
+    ordF(s, 'Pv').innerHTML = '';
+  }
+  $('ordShrUnit').value = 'dollars';
+  $('ordOptUnit').value = 'dollars';
   $('ordBack').classList.add('show');
-  ordChanged();
+  ordDirChanged();
 }
 
 function ordClose() {
   $('ordBack').classList.remove('show');
-  if (ORD.timer) { clearTimeout(ORD.timer); ORD.timer = null; }
+  for (const s of ['opt', 'shr'])
+    if (ORD.timer[s]) { clearTimeout(ORD.timer[s]); ORD.timer[s] = null; }
 }
 
-function ordLadderToggled() {
-  const on = $('ordLadderOn').checked;
-  $('ordLadderBody').style.display = on ? '' : 'none';
-  // The first rung is seeded from the level the card is working off, which
-  // is the whole reason the panel launches from a card rather than a form.
-  if (on && !ORD.rungs.length) {
-    ORD.rungs.push(ORD.anchor
+function ordDirChanged() {
+  // Direction decides the option TYPE and nothing else -- calls for a long,
+  // puts for a short. A hand-picked strike does not survive the switch,
+  // because the contract it named is on the other side of the chain.
+  ORD.sel = null;
+  const short = $('ordDir').value === 'short';
+  $('ordOptTitle').textContent = short ? 'Options — puts' : 'Options — calls';
+  $('ordShrSend').disabled = short;
+  $('ordShrPv').innerHTML = short
+    ? '<span style="color:var(--text-dim);">Shares are long-only, so there ' +
+      'is no commons order for a short.</span>' : '';
+  ordLoadChain(true);
+  ordTouched('opt');
+  if (!short) ordTouched('shr');
+}
+
+async function ordLoadChain(reset) {
+  if (reset) $('ordExpiry').innerHTML = '';
+  $('ordChainBody').innerHTML =
+    '<tr><td colspan="8" style="color:var(--text-dim);cursor:default;">' +
+    'loading chain…</td></tr>';
+  const body = {ticker: ORD.ticker, direction: $('ordDir').value,
+                each_way: ORD.eachWay};
+  if (!reset && $('ordExpiry').value) body.expiry = $('ordExpiry').value;
+  let r;
+  try { r = await api('/api/order/chain', body); }
+  catch (e) { r = {ok: false, reason: String(e)}; }
+  if (!r.ok) {
+    $('ordChainBody').innerHTML =
+      `<tr><td colspan="8" style="color:var(--red);cursor:default;">${
+        r.reason}</td></tr>`;
+    return;
+  }
+  ORD.chain = r;
+  $('ordExpiry').innerHTML = (r.expiries || [])
+    .map(e => `<option value="${e}"${e === r.expiry ? ' selected' : ''}>${
+      e}</option>`).join('');
+  ordDrawChain();
+  ordRenderGex(r);
+}
+
+function ordMoreStrikes() {
+  ORD.eachWay += 10;
+  ordLoadChain(false);
+}
+
+function ordDrawChain() {
+  const r = ORD.chain;
+  if (!r || !r.rows.length) {
+    $('ordChainBody').innerHTML =
+      '<tr><td colspan="8" style="color:var(--text-dim);cursor:default;">' +
+      'no contracts in range</td></tr>';
+    $('ordChainNote').textContent = '';
+    return;
+  }
+  const n = v => (v == null ? '—' : v);
+  $('ordChainBody').innerHTML = r.rows.map(c => {
+    const cls = [];
+    if (c.atm) cls.push('ordAtm');
+    if (ORD.sel === c.symbol) cls.push('ordSel');
+    const pick = (ORD.pv.opt && ORD.pv.opt.contract &&
+                  ORD.pv.opt.contract.symbol === c.symbol && !ORD.sel)
+      ? '<span class="ordPick">system pick</span>' : '';
+    return `<tr class="${cls.join(' ')}" onclick="ordPick('${c.symbol}')">
+      <td>${c.strike}${pick}</td>
+      <td>${n(c.bid)}</td><td>${n(c.ask)}</td><td>${n(c.mid)}</td>
+      <td>${c.delta == null ? '—' : c.delta.toFixed(2)}</td>
+      <td>${c.gamma == null ? '—' : c.gamma.toFixed(3)}</td>
+      <td>${c.iv == null ? '—' : (c.iv * 100).toFixed(0) + '%'}</td>
+      <td>${n(c.open_interest)}</td></tr>`;
+  }).join('');
+  $('ordChainNote').textContent = r.has_more
+    ? `${r.rows.length} of more — ${r.each_way} each side of spot`
+    : `${r.rows.length} strikes, all that are quoted`;
+  $('ordMoreBtn').style.display = r.has_more ? '' : 'none';
+}
+
+function ordRenderGex(r) {
+  // GEX is gamma x open interest. The indicative feed does not always carry
+  // open interest, and a total computed without it is a confident-looking
+  // zero -- so when it is missing this says so instead of drawing a number.
+  if (!r.gex) {
+    $('ordGex').textContent = r.gex_note || '';
+    return;
+  }
+  const m = v => (Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(2) + 'B'
+    : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v.toFixed(0));
+  const g = r.gex;
+  $('ordGex').innerHTML =
+    `<b>GEX</b> ${m(g.gex_total)} · calls ${m(g.gex_calls)} · puts ${
+      m(g.gex_puts)} <span style="opacity:.7;">(${g.n_contracts} contracts
+      with open interest)</span>`;
+}
+
+function ordPick(symbol) {
+  ORD.sel = (ORD.sel === symbol) ? null : symbol;   // click again to unpick
+  ordDrawChain();
+  ordTouched('opt');
+}
+
+/* ── per-side ladder ── */
+function ordLadderToggled(side) {
+  const on = ordF(side, 'LadderOn').checked;
+  ordF(side, 'LadderBody').style.display = on ? '' : 'none';
+  // The first rung seeds from the level the card is working off, which is the
+  // reason this launches from a card instead of a blank form.
+  if (on && !ORD.rungs[side].length) {
+    ORD.rungs[side].push(ORD.anchor
       ? {qty: 1, kind: 'price', value: ORD.anchor}
       : {qty: 1, kind: 'atr', value: 0.25});
-    ordDrawRungs();
+    ordDrawRungs(side);
   }
-  ordChanged();
+  ordTouched(side);
 }
 
-function ordAddRung() {
-  ORD.rungs.push({qty: 1, kind: 'atr', value: 0.25});
-  ordDrawRungs();
-  ordChanged();
+function ordAddRung(side) {
+  ORD.rungs[side].push({qty: 1, kind: 'atr', value: 0.25});
+  ordDrawRungs(side);
+  ordTouched(side);
 }
 
-function ordDropRung(i) {
-  ORD.rungs.splice(i, 1);
-  ordDrawRungs();
-  ordChanged();
+function ordDropRung(side, i) {
+  ORD.rungs[side].splice(i, 1);
+  ordDrawRungs(side);
+  ordTouched(side);
 }
 
-function ordRungEdit(i, field, v) {
-  ORD.rungs[i][field] = (field === 'kind') ? v : parseFloat(v);
-  if (field === 'kind') ordDrawRungs();
-  ordChanged();
+function ordRungEdit(side, i, field, v) {
+  ORD.rungs[side][i][field] = (field === 'kind') ? v : parseFloat(v);
+  if (field === 'kind') ordDrawRungs(side);
+  ordTouched(side);
 }
 
-function ordDrawRungs() {
-  $('ordRungs').innerHTML = ORD.rungs.map((r, i) => `
+function ordDrawRungs(side) {
+  const unit = side === 'opt' ? 'contracts' : 'shares';
+  ordF(side, 'Rungs').innerHTML = ORD.rungs[side].map((r, i) => `
     <div class="ordRung">
       <input type="number" min="1" step="1" value="${r.qty}"
-             title="how many shares or contracts this rung sells"
-             oninput="ordRungEdit(${i},'qty',this.value)">
-      <select onchange="ordRungEdit(${i},'kind',this.value)">
+             title="how many ${unit} this rung sells"
+             oninput="ordRungEdit('${side}',${i},'qty',this.value)">
+      <select onchange="ordRungEdit('${side}',${i},'kind',this.value)">
         <option value="atr"${r.kind === 'atr' ? ' selected' : ''}>ATR from fill</option>
         <option value="price"${r.kind === 'price' ? ' selected' : ''}>at price</option>
       </select>
-      <input type="number" step="${r.kind === 'atr' ? '0.05' : '0.01'}" min="0.01"
-             value="${r.value}"
-             oninput="ordRungEdit(${i},'value',this.value)">
-      <button class="ordX" title="remove this rung"
-              onclick="ordDropRung(${i})">×</button>
+      <input type="number" step="${r.kind === 'atr' ? '0.05' : '0.01'}"
+             min="0.01" value="${r.value}"
+             oninput="ordRungEdit('${side}',${i},'value',this.value)">
+      <button class="ordX" onclick="ordDropRung('${side}',${i})"
+              title="remove">×</button>
     </div>`).join('');
 }
 
-function ordLadderSleeve() {
-  // A ladder targets ONE sleeve (make_ladder takes a single one, and
-  // plan_exit refuses a partial on 'both'). For combo the sleeve has to be
-  // inferred, and direction decides it: a short combo is puts only -- there
-  // is no share leg to ladder -- while a long combo has both and shares are
-  // the side the backtester can actually referee (design/07 §6.1).
-  const s = $('ordSleeve').value;
-  if (s !== 'combo') return s;
-  return $('ordDir').value === 'short' ? 'options' : 'shares';
-}
-
-function ordLadderSpec() {
-  if (!$('ordLadderOn').checked) return null;
-  const rungs = ORD.rungs
-    .filter(r => r.qty >= 1 && r.value > 0)
-    .map((r, i) => ({id: 'r' + (i + 1), qty: Math.round(r.qty),
-                     at: {kind: r.kind, value: r.value}}));
-  const on = $('ordRatchet').value === 'on';
+function ordLadderSpec(side) {
+  if (!ordF(side, 'LadderOn').checked) return null;
+  const on = ordF(side, 'Ratchet').value === 'on';
   return {
-    sleeve: ordLadderSleeve(),
-    rungs: rungs,
-    ratchet: on ? {enabled: true,
-                   atr_mult: parseFloat($('ordRatchetMult').value || 0.5)}
-                : {enabled: false},
-    remainder: $('ordRemainder').value,
+    sleeve: ORD_SLEEVE[side],
+    rungs: ORD.rungs[side]
+      .filter(r => r.qty >= 1 && r.value > 0)
+      .map((r, i) => ({id: 'r' + (i + 1), qty: Math.round(r.qty),
+                       at: {kind: r.kind, value: r.value}})),
+    ratchet: on
+      ? {enabled: true,
+         atr_mult: parseFloat(ordF(side, 'RatchetMult').value || 0.5)}
+      : {enabled: false},
+    remainder: ordF(side, 'Remainder').value,
   };
 }
 
-function ordBody() {
-  const unit = $('ordUnit').value;
-  const size = parseFloat($('ordSize').value);
-  const body = {
-    ticker: ORD.ticker,
-    direction: $('ordDir').value,
-    sleeve: $('ordSleeve').value,
-  };
+/* ── preview ── */
+function ordBody(side) {
+  const body = {ticker: ORD.ticker, direction: $('ordDir').value,
+                sleeve: ORD_SLEEVE[side]};
+  const size = parseFloat(ordF(side, 'Size').value);
+  const unit = ordF(side, 'Unit').value;
   if (!isNaN(size) && size > 0) {
-    if (unit === 'shares') body.shares = Math.round(size);
-    else body.dollars = size;
+    if (unit === 'dollars') body.dollars = size;
+    else if (unit === 'shares') body.shares = Math.round(size);
+    else body.contracts = Math.round(size);
   }
-  const lad = ordLadderSpec();
+  if (ordF(side, 'Type').value === 'limit') {
+    body.order_type = 'limit';
+    const lp = parseFloat(ordF(side, 'Limit').value);
+    if (!isNaN(lp) && lp > 0) body.limit_price = lp;
+  }
+  if (side === 'opt' && ORD.sel) body.contract_symbol = ORD.sel;
+  const lad = ordLadderSpec(side);
   if (lad) body.ladder = lad;
   return body;
 }
 
-function ordChanged() {
-  $('ordLadderSleeve').textContent = $('ordLadderOn').checked
-    ? 'on the ' + ordLadderSleeve() + ' sleeve' : '';
-  if (ORD.timer) clearTimeout(ORD.timer);
-  ORD.timer = setTimeout(ordPreview, 260);   // debounce: this hits the broker
+function ordTouched(side) {
+  ordF(side, 'Limit').disabled = ordF(side, 'Type').value !== 'limit';
+  if (ORD.timer[side]) clearTimeout(ORD.timer[side]);
+  ORD.timer[side] = setTimeout(() => ordPreview(side), 260);
 }
 
-async function ordPreview() {
-  const mine = ++ORD.seq;
+async function ordPreview(side) {
+  if (side === 'shr' && $('ordDir').value === 'short') return;
+  const mine = ++ORD.seq[side];
   let r;
-  try { r = await api('/api/order/preview', ordBody()); }
+  try { r = await api('/api/order/preview', ordBody(side)); }
   catch (e) { r = {ok: false, reason: String(e)}; }
-  if (mine !== ORD.seq) return;    // a later edit already won
-  ORD.last = r;
-  ordRenderPreview(r);
+  if (mine !== ORD.seq[side]) return;      // a later edit already won
+  ORD.pv[side] = r;
+  ordRenderPv(side, r);
+  if (side === 'opt') ordDrawChain();      // repaint the 'system pick' tag
+  ordHeadStats(r);
 }
 
-function ordRenderPreview(r) {
+function ordHeadStats(r) {
+  if (!r || !r.ok) return;
+  $('ordHeadStats').innerHTML =
+    `<span>mid <b>${moneyFull(r.quote.mid)}</b></span>` +
+    `<span>ATR <b>${r.atr == null ? '—' : r.atr.toFixed(2)}</b></span>` +
+    (r.default_allocation_pct != null
+      ? `<span>default <b>${r.default_allocation_pct}%</b> = ${
+          moneyFull(r.default_budget)}</span>` : '');
+}
+
+function ordRenderPv(side, r) {
+  const box = ordF(side, 'Pv');
   if (!r || !r.ok) {
-    $('ordPreview').innerHTML =
-      `<div class="ordErr">Cannot price this: ${(r && r.reason) || 'unknown'}</div>`;
+    box.innerHTML = `<div class="ordErr">${(r && r.reason) || 'unknown'}</div>`;
+    ordF(side, 'Send').disabled = true;
     return;
   }
   const legs = (r.legs || []).map(l => l.kind === 'option'
     ? `<div class="ordLeg"><span>${l.contracts} × ${l.type} ${l.strike}
-         exp ${l.expiry} @ ${moneyFull(l.est_premium)}</span>
-         <span>${moneyFull(l.est_cost)}</span></div>`
-    : `<div class="ordLeg"><span>${l.qty} shares @ ${moneyFull(l.est_price)}</span>
+         ${l.expiry}</span><span>${moneyFull(l.est_cost)}</span></div>`
+    : `<div class="ordLeg"><span>${l.qty} shares @ ${
+         moneyFull(l.est_price)}</span>
          <span>${moneyFull(l.est_cost)}</span></div>`).join('');
-
   const rungs = (r.ladder_rungs || []).map(x =>
-    `<div class="ordLeg"><span>rung ${x.id}: ${x.qty} at
-       ${x.at.kind === 'atr' ? x.at.value + ' ATR' : moneyFull(x.at.value)}</span>
-       <span>${moneyFull(x.price)}</span></div>`).join('');
+    `<div class="ordLeg"><span>rung ${x.id}: ${x.qty} at ${
+       x.at.kind === 'atr' ? x.at.value + ' ATR' : moneyFull(x.at.value)
+     }</span><span>${moneyFull(x.price)}</span></div>`).join('');
 
-  const warn = (r.warnings || [])
-    .map(w => `<div class="ordWarn">${w}</div>`).join('');
-  const lerr = r.ladder_error
-    ? `<div class="ordErr">Ladder: ${r.ladder_error}</div>` : '';
-
-  $('ordPreview').innerHTML = `
-    <div class="ordLeg" style="margin-bottom:5px;">
-      <span style="color:var(--text-dim);">mid ${moneyFull(r.quote.mid)}
-        · ATR ${r.atr == null ? '—' : r.atr.toFixed(2)}</span>
+  box.innerHTML = `
+    <div class="ordLeg">
+      <span style="color:var(--text-dim);">${
+        r.order_type === 'limit'
+          ? 'limit ' + moneyFull(r.limit_price) : 'market'}</span>
       <span class="ordBig">${moneyFull(r.est_cash)}</span>
     </div>
     ${legs || '<div style="color:var(--text-dim);">No leg at this size.</div>'}
-    <div class="ordLeg" style="margin-top:5px;color:var(--text-dim);">
-      <span>budget ${moneyFull(r.budget)}${
-        r.default_allocation_pct != null
-          ? ` · watchlist default ${r.default_allocation_pct}%` : ''}</span>
+    <div class="ordLeg" style="color:var(--text-dim);">
+      <span>budget ${moneyFull(r.budget)}</span>
       <span>${moneyFull(r.unspent)} unspent</span>
     </div>
-    ${rungs ? `<div style="margin-top:8px;">${rungs}</div>` : ''}
+    ${rungs ? `<div style="margin-top:6px;">${rungs}</div>` : ''}
     ${r.ladder_describes
-      ? `<div class="ordNote" style="margin-top:6px;">${r.ladder_describes}</div>`
-      : ''}
-    ${lerr}${warn}`;
+      ? `<div class="ordNote" style="margin-top:5px;">${
+          r.ladder_describes}</div>` : ''}
+    ${r.ladder_error ? `<div class="ordErr">Ladder: ${r.ladder_error}</div>` : ''}
+    ${(r.warnings || []).map(w => `<div class="ordWarn">${w}</div>`).join('')}`;
+  ordF(side, 'Send').disabled = !(r.legs || []).length;
 }
 
-async function ordSend() {
+/* ── send ── */
+async function ordSend(side) {
   if (ORD.sending) return;
-  const r = ORD.last;
+  const r = ORD.pv[side];
   if (!r || !r.ok || !(r.legs || []).length) {
     await appConfirm('Nothing to send',
-      'The preview has no leg to place. Change the size or the sleeve.', 'OK');
+      'There is no leg at this size. Change the size or the contract.', 'OK');
     return;
   }
   if (r.ladder_error) {
     await appConfirm('Ladder is not valid',
-      `${r.ladder_error}<br><br>Fix the ladder, or untick it to send the entry
-       on its own.`, 'OK');
+      `${r.ladder_error}<br><br>Fix it, or untick the ladder to send the
+       entry on its own.`, 'OK');
     return;
   }
-  const lad = ordLadderSpec();
+  const lad = ordLadderSpec(side);
   const lines = (r.legs || []).map(l => l.kind === 'option'
     ? `${l.contracts} × ${l.type} ${l.strike} exp ${l.expiry}`
     : `${l.qty} shares`).join('<br>');
-  const ok = await appConfirm(`Send ${ORD.ticker} ${$('ordDir').value}?`,
-    `${lines}<br><br><b>${moneyFull(r.est_cash)}</b> at the mid.` +
-    (lad ? `<br><br>Ladder on the ${lad.sleeve} sleeve: ${
-       r.ladder_describes || (lad.rungs.length + ' rung(s)')}.` +
-       `<br>It is pinned only after the broker confirms the fill.`
+  const ok = await appConfirm(
+    `Send ${ORD.ticker} ${$('ordDir').value} — ${ORD_SLEEVE[side]}?`,
+    `${lines}<br><br><b>${moneyFull(r.est_cash)}</b> ${
+      r.order_type === 'limit'
+        ? 'at a limit of ' + moneyFull(r.limit_price)
+        : 'at market'}.` +
+    (lad ? `<br><br>Ladder: ${r.ladder_describes ||
+             (lad.rungs.length + ' rung(s)')}.<br>Pinned only after the
+             broker confirms the fill.`
          : '<br><br>No ladder: exits stay engine-driven.') +
     ((r.warnings || []).length ? `<br><br>${r.warnings.join('<br>')}` : ''),
     'Send it');
   if (!ok) return;
 
-  ORD.sending = true;
-  $('ordSend').textContent = 'Sending…';
+  ORD.sending = side;
+  ordF(side, 'Send').textContent = 'Sending…';
   let res;
-  try { res = await api('/api/manual/buy', ordBody()); }
+  try { res = await api('/api/manual/buy', ordBody(side)); }
   catch (e) { res = {ok: false, reason: String(e)}; }
-  ORD.sending = false;
-  $('ordSend').textContent = 'Review and send';
+  ORD.sending = null;
+  ordF(side, 'Send').textContent =
+    side === 'opt' ? 'Review and send options' : 'Review and send shares';
 
   if (!res.ok) {
     await appConfirm('Order failed', res.reason || 'unknown', 'OK');
@@ -5700,8 +5995,9 @@ async function ordSend() {
   ordClose();
   const lr = res.ladder;
   await appConfirm('Sent',
-    `${ORD.ticker}: ${res.filled != null ? res.filled : '?'} leg(s) filled` +
-    (res.failed ? `, ${res.failed} failed` : '') + '.' +
+    `${ORD.ticker}: ${res.filled} leg(s) filled` +
+    (res.failed ? `, ${res.failed} failed` : '') +
+    ` (${res.order_type}).` +
     (lr ? (lr.ok
       ? `<br><br>Ladder attached to ${lr.position_qty} ${lr.sleeve},
          anchored at ${moneyFull(lr.anchor)}.`
@@ -5710,7 +6006,9 @@ async function ordSend() {
       : ''),
     'OK');
   if (typeof refreshDashboard === 'function') refreshDashboard();
+  if (typeof refreshPositions === 'function') refreshPositions();
 }
+
 
 /* ── universe screener ── */
 let _scrTimer = null;

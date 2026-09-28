@@ -274,6 +274,9 @@ def confirm_fill(alpaca, order_id, timeout_s=4.0, poll_s=0.5):
 
 
 def execute_plan(alpaca, ticker, legs, reason=''):
+    # A leg may carry an optional 'limit_price'. Absent, the order is MARKET,
+    # which is what every engine path sends and has always sent. Only the
+    # order panel sets it, and only because a person asked for a limit.
     """Fire legs in order. Options first, shares best-effort.
 
     Returns {'filled': [...], 'failed': [...]}. Each filled entry carries
@@ -288,10 +291,12 @@ def execute_plan(alpaca, ticker, legs, reason=''):
     for leg in legs:
         if leg['kind'] == 'option':
             r = alpaca.place_option_order(leg['symbol'], leg['side'],
-                                          leg['contracts'])
+                                          leg['contracts'],
+                                          limit_price=leg.get('limit_price'))
             sleeve, qty, symbol = 'OPTIONS', leg['contracts'], leg['symbol']
         else:
-            r = alpaca.place_share_order(ticker, leg['side'], leg['qty'])
+            r = alpaca.place_share_order(ticker, leg['side'], leg['qty'],
+                                         limit_price=leg.get('limit_price'))
             sleeve, qty, symbol = 'SHARES', leg['qty'], ticker
 
         ok = _order_ok(r)

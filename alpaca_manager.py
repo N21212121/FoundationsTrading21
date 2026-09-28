@@ -488,19 +488,31 @@ class AlpacaManager:
 
     # ── Orders / positions ────────────────────────────────────────────────────
 
-    def place_share_order(self, ticker, side, qty):
-        """Market order for shares. side: 'buy'|'sell'.
+    def place_share_order(self, ticker, side, qty, limit_price=None):
+        """Shares. side: 'buy'|'sell'. limit_price=None means a MARKET order.
+
+        A limit is DAY like everything else here, so an unfilled one dies at
+        the bell rather than resting overnight against a position the engine
+        thinks it knows the size of.
+
         Returns {'order_id', 'status', 'symbol', 'qty'} or {'status':'error',...}."""
         self._require()
-        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
         self.limiter.wait()
         try:
-            req = MarketOrderRequest(
-                symbol=ticker, qty=qty,
-                side=OrderSide.BUY if side == 'buy' else OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-            )
+            _side = OrderSide.BUY if side == 'buy' else OrderSide.SELL
+            if limit_price is not None:
+                req = LimitOrderRequest(
+                    symbol=ticker, qty=qty, side=_side,
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=round(float(limit_price), 2),
+                )
+            else:
+                req = MarketOrderRequest(
+                    symbol=ticker, qty=qty, side=_side,
+                    time_in_force=TimeInForce.DAY,
+                )
             o = self._trading.submit_order(req)
             log_forensic('api_event', event='place_share_order', ticker=ticker,
                          side=side, qty=qty, status='ok', order_id=str(o.id))
@@ -511,8 +523,9 @@ class AlpacaManager:
                          side=side, qty=qty, status='error', error=str(e))
             return {'status': 'error', 'message': str(e)}
 
-    def place_option_order(self, option_symbol, side, contracts):
-        """Market order for option contracts. side: 'buy'|'sell'.
+    def place_option_order(self, option_symbol, side, contracts,
+                           limit_price=None):
+        """Option contracts. side: 'buy'|'sell'. limit_price=None is MARKET.
 
         Position intent is ALWAYS explicit and one-directional:
           buy  -> BUY_TO_OPEN   (establish/add a long option position)
@@ -523,18 +536,26 @@ class AlpacaManager:
                                  structurally impossible for this system.
         """
         self._require()
-        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce, PositionIntent
         self.limiter.wait()
         try:
             intent = (PositionIntent.BUY_TO_OPEN if side == 'buy'
                       else PositionIntent.SELL_TO_CLOSE)
-            req = MarketOrderRequest(
-                symbol=option_symbol, qty=contracts,
-                side=OrderSide.BUY if side == 'buy' else OrderSide.SELL,
-                time_in_force=TimeInForce.DAY,
-                position_intent=intent,
-            )
+            _side = OrderSide.BUY if side == 'buy' else OrderSide.SELL
+            if limit_price is not None:
+                req = LimitOrderRequest(
+                    symbol=option_symbol, qty=contracts, side=_side,
+                    time_in_force=TimeInForce.DAY,
+                    position_intent=intent,
+                    limit_price=round(float(limit_price), 2),
+                )
+            else:
+                req = MarketOrderRequest(
+                    symbol=option_symbol, qty=contracts, side=_side,
+                    time_in_force=TimeInForce.DAY,
+                    position_intent=intent,
+                )
             o = self._trading.submit_order(req)
             log_forensic('api_event', event='place_option_order',
                          symbol=option_symbol, side=side, qty=contracts,
