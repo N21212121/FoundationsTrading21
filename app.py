@@ -861,6 +861,105 @@ def _persist_ladder(ticker, ladder):
         _save_positions(pos)
 
 
+def _atr_at_fill(ticker):
+    """Daily ATR for pinning a ladder, on the same period the backtester uses.
+
+    None if there is not enough history, which make_ladder will refuse for any
+    ATR-keyed rung. That refusal is the point: an ATR rung without an ATR is a
+    rung at an unknown price.
+    """
+    import levels as lv
+    bars = alpaca.get_bars(ticker, '1Day', limit=backtester.ATR_PERIOD + 40)
+    return lv.atr(bars, backtester.ATR_PERIOD)
+
+
+def _ladder_from_spec(spec, *, ticker, sleeve, anchor, qty, atr=None):
+    """Build a validated ladder from what the order panel sent.
+
+    Returns (ladder, None) or (None, reason). Never raises: the panel is a
+    user surface and a malformed rung is an error message, not a 500.
+
+    The panel sends rung quantities as WHOLE UNITS of the sleeve -- shares or
+    contracts -- because that is what the person sees and what the broker
+    fills. Fractions of a position are the backtester's language (design/07
+    §6 resolve_ladder_template), not this one.
+    """
+    if not spec:
+        return None, None
+    if sleeve not in ('shares', 'options'):
+        return None, ('a ladder targets one sleeve: pick shares or options, '
+                      'not combo')
+    try:
+        ladder = el.make_ladder(
+            sleeve=sleeve,
+            anchor=float(anchor),
+            atr=atr if atr is not None else _atr_at_fill(ticker),
+            position_qty=int(qty),
+            rungs=spec.get('rungs') or [],
+            ratchet=spec.get('ratchet'),
+            remainder=spec.get('remainder', 'engine'))
+    except (ValueError, TypeError) as e:
+        return None, str(e)
+    return ladder, None
+
+
+def _attach_ladder(ticker, direction, spec):
+    """Pin a ladder to a position that EXISTS, sized from broker truth.
+
+    design/07 §7: never before confirm_fill. A ladder attached to an unfilled
+    order is a ladder against a position that does not exist, and its rung
+    quantities would be a guess about a fill that may never come. So the size
+    and the anchor are read back from the broker rather than from the plan --
+    a partial fill produces a smaller ladder, which is correct, instead of
+    rungs that oversell.
+
+    Returns a small report. A failure here never fails the ENTRY: the position
+    is open and real either way, and the person is told the ladder did not
+    attach so they can exit it by hand.
+    """
+    sleeve = (spec or {}).get('sleeve')
+    if sleeve not in ('shares', 'options'):
+        return {'ok': False, 'error': "ladder.sleeve must be 'shares' "
+                                      "or 'options'"}
+    p = _positions().get(ticker) or {}
+    try:
+        broker = alpaca.get_positions()
+    except Exception as e:
+        return {'ok': False, 'error': f'could not read broker positions: {e}'}
+
+    if sleeve == 'shares':
+        row = next((b for b in broker if b['symbol'] == ticker), None)
+        # Shares ARE the underlying, so the broker's average entry is exactly
+        # the anchor a rung should measure from.
+        anchor = row and row['avg_entry_price']
+    else:
+        osym = p.get('option_symbol')
+        row = next((b for b in broker if b['symbol'] == osym), None)
+        # The option's avg_entry_price is PREMIUM. Rungs key to the underlying
+        # (design/07 §2), so the anchor is the underlying, read now -- seconds
+        # after the fill, which is the closest honest reading available.
+        q = alpaca.get_quote(ticker)
+        anchor = q and q['mid']
+    if not row or not row.get('qty'):
+        return {'ok': False, 'error': f'no {sleeve} position at the broker '
+                                      f'to attach to'}
+    if not anchor:
+        return {'ok': False, 'error': 'no anchor price available'}
+
+    ladder, err = _ladder_from_spec(spec, ticker=ticker, sleeve=sleeve,
+                                    anchor=anchor, qty=int(abs(row['qty'])))
+    if err:
+        cm.log_forensic('ladder', ticker=ticker, status='error', error=err)
+        return {'ok': False, 'error': err}
+
+    _persist_ladder(ticker, ladder)
+    cm.log_forensic('ladder', ticker=ticker, status='attached',
+                    note=el.describe(ladder, direction))
+    return {'ok': True, 'sleeve': sleeve, 'position_qty': ladder['position_qty'],
+            'anchor': ladder['anchor'], 'atr': ladder['atr'],
+            'describes': el.describe(ladder, direction)}
+
+
 def _run_ladder(ticker, bar_close, ctx, d, act=True):
     """Advance and fire one position's exit ladder. design/07 §4.
 
@@ -2416,6 +2515,139 @@ def positions():
     return jsonify(pos)
 
 
+@app.route('/api/order/preview', methods=['POST'])
+def order_preview():
+    """What /api/manual/buy WOULD do. Sends nothing. design/07 §7.
+
+    The panel calls this on every edit, so it must stay read-only and cheap.
+    It plans through the same tr.plan_entry the live path uses rather than
+    reimplementing the sizing, because a preview that computes its own answer
+    is a second sizing rule and will drift from the first one.
+    """
+    body = request.json or {}
+    ticker = (body.get('ticker') or '').upper()
+    direction = body.get('direction', 'long')
+    sleeve = body.get('sleeve', 'combo')
+    if not ticker:
+        return jsonify({'ok': False, 'reason': 'no ticker'}), 400
+    if not alpaca.is_connected():
+        return jsonify({'ok': False, 'reason': 'not connected'}), 400
+
+    cfg = cm.load_config()
+    q = alpaca.get_quote(ticker)
+    if not q:
+        return jsonify({'ok': False, 'reason': 'no quote'}), 400
+    spot = q['mid']
+
+    default_budget = _budget_for(ticker, cfg)
+    raw = body.get('dollars')
+    budget = float(raw) if raw not in (None, '') else default_budget
+    if body.get('shares') not in (None, ''):        # sized in shares instead
+        budget = int(body['shares']) * spot
+
+    warnings = []
+    chain = None
+    if sleeve in ('combo', 'options'):
+        chain = alpaca.get_options_chain(ticker, spot,
+                                         strike_range_pct=tr.STRIKE_RANGE_PCT,
+                                         dte_min=tr.DTE_MIN, dte_max=tr.DTE_MAX)
+
+    if sleeve == 'shares':
+        if direction == 'short':
+            return jsonify({'ok': False, 'reason': 'shares are long-only'}), 400
+        plan = tr._plan_shares_only(direction, budget, spot)
+    elif sleeve == 'options':
+        want = 'call' if direction == 'long' else 'put'
+        c = tr.pick_contract(chain, want, spot)
+        if not c:
+            plan = {'legs': [], 'reason': 'no qualifying contract'}
+        else:
+            split = tr.compute_fill_spill(budget, c['mid'])
+            plan = ({'legs': [tr._option_leg(c, split['contracts'])],
+                     'reason': f"{split['contracts']} contract(s)"}
+                    if split['contracts'] >= 1
+                    else {'legs': [], 'reason': 'budget below one contract'})
+    else:
+        plan = tr.plan_entry(direction, budget, spot, chain)
+
+    legs, cash = [], 0.0
+    for leg in plan['legs']:
+        if leg['kind'] == 'option':
+            cost = leg['contracts'] * leg['est_premium'] * 100
+            legs.append({**leg, 'est_cost': round(cost, 2)})
+        else:
+            cost = leg['qty'] * leg['est_price']
+            legs.append({**leg, 'est_cost': round(cost, 2)})
+        cash += cost
+
+    # The contract is DISPLAYED, never chosen here: trade_router's locked spec
+    # picks it, and a hand-picked strike would be a second sizing rule.
+    contract = next((l for l in legs if l['kind'] == 'option'), None)
+
+    atr = _atr_at_fill(ticker)
+    ladder_spec = body.get('ladder')
+    ladder, ladder_error, ladder_words, rungs_out = None, None, None, []
+    if ladder_spec:
+        lsleeve = ladder_spec.get('sleeve') or (
+            sleeve if sleeve in ('shares', 'options') else None)
+        held = 0
+        for l in legs:
+            if lsleeve == 'options' and l['kind'] == 'option':
+                held = l['contracts']
+            elif lsleeve == 'shares' and l['kind'] == 'shares':
+                held = l['qty']
+        if not held:
+            ladder_error = f'no {lsleeve or "?"} leg to ladder at this size'
+        else:
+            ladder, ladder_error = _ladder_from_spec(
+                ladder_spec, ticker=ticker, sleeve=lsleeve, anchor=spot,
+                qty=held, atr=atr)
+        if ladder:
+            ladder_words = el.describe(ladder, direction)
+            for r in ladder['rungs']:
+                rungs_out.append({**r,
+                                  'price': round(el.rung_price(r, ladder,
+                                                               direction), 2)})
+            if lsleeve == 'options':
+                warnings.append(
+                    'The backtester models shares only, so an options ladder '
+                    'is not refereeable by it (design/07 §6.1).')
+
+    if atr is None:
+        warnings.append('No daily ATR available; ATR-keyed rungs will refuse.')
+    if not plan['legs']:
+        warnings.append(plan['reason'])
+    if ladder_spec and not _engine_enabled:
+        # _run_ladder is gated on the same switch, so a ladder attached while
+        # the app is OBSERVE ONLY is stored and never evaluated. Saying so in
+        # the panel is the difference between a decision and a silent no-op.
+        warnings.append('Engine is OBSERVE ONLY, so this ladder will be '
+                        'stored but never evaluated until the engine is on.')
+
+    return jsonify({
+        'ok': True,
+        'ticker': ticker, 'direction': direction, 'sleeve': sleeve,
+        'quote': {'bid': q.get('bid'), 'ask': q.get('ask'), 'mid': spot},
+        'atr': round(atr, 4) if atr is not None else None,
+        'budget': round(budget, 2),
+        'default_budget': round(default_budget, 2),
+        'default_allocation_pct': next(
+            (float(w.get('allocation_pct', 0))
+             for w in cfg.get('watchlist', [])
+             if w['ticker'].upper() == ticker), None),
+        'legs': legs,
+        'contract': contract,
+        'est_cash': round(cash, 2),
+        'unspent': round(budget - cash, 2),
+        'plan_reason': plan['reason'],
+        'ladder': ladder,
+        'ladder_rungs': rungs_out,
+        'ladder_describes': ladder_words,
+        'ladder_error': ladder_error,
+        'warnings': warnings,
+    })
+
+
 @app.route('/api/manual/buy', methods=['POST'])
 def manual_buy():
     body = request.json or {}
@@ -2427,9 +2659,12 @@ def manual_buy():
     if not alpaca.is_connected():
         return jsonify({'ok': False, 'reason': 'not connected'}), 400
     cfg = cm.load_config()
+    ladder_spec = body.get('ladder')
 
     if sleeve == 'combo':
         r = _do_entry(ticker, direction, cfg, source='manual')
+        if ladder_spec and r.get('ok'):
+            r['ladder'] = _attach_ladder(ticker, direction, ladder_spec)
         return jsonify(r)
 
     # single-sleeve manual entries
@@ -2483,8 +2718,11 @@ def manual_buy():
             p['share_entry_price'] = leg['est_price']
     pos[ticker] = p
     _save_positions(pos)
-    return jsonify({'ok': True, 'filled': len(result['filled']),
-                    'failed': len(result['failed'])})
+    out = {'ok': True, 'filled': len(result['filled']),
+           'failed': len(result['failed'])}
+    if ladder_spec and result['filled']:
+        out['ladder'] = _attach_ladder(ticker, direction, ladder_spec)
+    return jsonify(out)
 
 
 @app.route('/api/manual/sell', methods=['POST'])
