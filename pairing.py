@@ -30,6 +30,7 @@ VALIDATION
   creating or destroying money and the output should not be trusted.
 """
 
+import math
 from datetime import datetime
 
 import journal as jn
@@ -232,6 +233,304 @@ def reconcile(records=None, legs=None, now=None):
     }
 
 
+
+# ─── DECISION ROWS ─────────────────────────────────────────────────────────────
+#
+# WHY THIS EXISTS
+#   A leg is one entry fill matched to one exit fill. That is the right unit
+#   when several ENTRIES share an exit -- two buys closed by one sell were two
+#   separate decisions and deserve two rows, which is what the module docstring
+#   argues above and what the heatmap was built on.
+#
+#   The exit ladder creates the mirror case, and the mirror case is different.
+#   ONE entry closed by three rungs is ONE decision, closed in instalments.
+#   Left as legs it paints three cells of the grid, inflates every count
+#   labelled 'trades', and weights that single decision three times as heavily
+#   as an unladdered one. Grouping by entry_id fixes exactly that and nothing
+#   else: the multi-entry case is untouched, because those legs carry
+#   different entry_ids and stay separate rows.
+#
+# THE GRADE
+#   Each exit keeps its own integer grade -- journal.set_grade enforces [0, 4].
+#   Only the collapse produces a fraction, as a QUANTITY-WEIGHTED mean: closing
+#   8 of 10 shares well and 2 badly is mostly a good exit, and weighting by
+#   quantity is what says so. Nate's rounding rule (2026-09-28) then puts it on
+#   the integer grid: a fraction of .60 or more earns the next grade up,
+#   anything less does not. That is deliberately stricter than round-half-up --
+#   a 2.5 is a 2, not a 3 -- so a grade has to be clearly earned.
+#
+#   exit_grade_exact keeps the unrounded mean. Trade averages and anything
+#   reading a single trade should use it; only the grid rounds.
+
+GRADE_ROUND_UP_AT = 0.60
+
+
+def round_grade(value):
+    """Nate's rule: round up from .60, down below it. None passes through.
+
+    Not round-half-up. 2.59 -> 2, 2.60 -> 3. Grades are non-negative so the
+    floor is unambiguous; EPS absorbs the float representation of .60, which
+    lands a hair under it.
+    """
+    if value is None:
+        return None
+    whole = math.floor(value)
+    return whole + 1 if (value - whole) >= GRADE_ROUND_UP_AT - EPS else whole
+
+
+def _weighted_exit_grade(legs):
+    """Quantity-weighted mean of the exit grades present. None if there are
+    none -- an entry still fully open, or one whose exits are all ungraded.
+
+    Weights are leg quantities, so a rung's influence is the size it closed.
+    """
+    num = den = 0.0
+    for l in legs:
+        g, q = l.get('exit_grade'), l.get('qty')
+        if isinstance(g, bool) or not isinstance(g, (int, float)):
+            continue                      # 'none', None, or anything odd
+        if not q or q <= 0:
+            continue
+        num += g * q
+        den += q
+    return (num / den) if den else None
+
+
+def collapse_to_entries(legs=None):
+    """Group legs into one row per entry decision, FIFO order preserved.
+
+    Returns rows shaped like legs, plus:
+      n_legs            how many exits closed this entry (1 for everything
+                        that predates the ladder)
+      qty_closed        quantity actually closed, which is < qty while a
+                        ladder still has rungs pending
+      exit_grade_exact  the unrounded quantity-weighted mean
+      exit_grade        that mean under round_grade, or 'none' if there is
+                        no graded exit yet -- the sixth column of the grid
+
+    WHAT AN EXIT-SIDE FILTER MEANS AFTER A COLLAPSE
+      A ladder's rungs can close under different conditions, so there is no
+      single honest answer. Conditions are taken from the LARGEST exit by
+      quantity -- the one that dominates the weighted grade -- while tags are
+      UNIONED, because a tag records a thing that happened and it did happen.
+      For a single-exit trade both rules are identities, which is almost all
+      of the history -- but NOT all of it. See below.
+
+    THE HISTORY IS NOT INERT
+      Four entries in the journal as of 2026-09-28 were already closed in
+      instalments by hand, long before the ladder existed: two AMC options
+      (2026-07-21) and two MUU stock (2026-08-28, 2026-09-09). They account
+      for 6 absorbed legs, 208 -> 202 rows. Three collapse without moving a
+      grade; MUU 2026-08-28 held legs graded 2 and 4 at equal size and now
+      grids at 3, a cell it was never in before, and MUU 2026-09-09 weights
+      1/2/3/4 into 2.2 and grids at 2.
+
+      This is the collapse working, not failing -- those were single decisions
+      all along. But it means the grid is not bit-identical to what it showed
+      yesterday, and a saved screenshot of the old grid will not reconcile.
+    """
+    if legs is None:
+        legs = build_legs()
+
+    order, groups = [], {}
+    for l in legs:
+        k = l.get('entry_id')
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(l)
+
+    rows = []
+    for k in order:
+        group = groups[k]
+        base = dict(group[0])
+        priced = [l for l in group if l.get('pl_exact') is not None]
+        closed = [l for l in group if l.get('exit_id') is not None]
+
+        qty_total = sum(l.get('qty') or 0 for l in group)
+        qty_closed = sum(l.get('qty') or 0 for l in closed)
+        entry_cash_priced = sum(l.get('entry_cash') or 0 for l in priced)
+        pl_exact = sum(l['pl_exact'] for l in priced) if priced else None
+
+        # Hold time is quantity-weighted for the same reason the grade is: the
+        # rung that closed most of the position should dominate the number.
+        hold_num = hold_den = 0.0
+        for l in closed:
+            h, q = l.get('hold_minutes'), l.get('qty')
+            if h is not None and q:
+                hold_num += h * q
+                hold_den += q
+
+        biggest = (max(closed, key=lambda l: l.get('qty') or 0)
+                   if closed else None)
+        exact = _weighted_exit_grade(group)
+
+        base.update({
+            'n_legs': len(group),
+            'qty': round(qty_total, 6),
+            'qty_closed': round(qty_closed, 6),
+            'entry_cash': round(sum(l.get('entry_cash') or 0
+                                    for l in group), 4),
+            'exit_cash': (round(sum(l.get('exit_cash') or 0
+                                    for l in closed), 4) if closed else None),
+            'pl_exact': pl_exact,
+            'pl': round(pl_exact, 2) if pl_exact is not None else None,
+            # Against the entry cash of the PRICED legs only, so a half-closed
+            # ladder is not diluted by the part still open.
+            'pl_pct': (round(pl_exact / entry_cash_priced, 6)
+                       if pl_exact is not None and entry_cash_priced else None),
+            'hold_minutes': (round(hold_num / hold_den, 1)
+                             if hold_den else None),
+            'exit_at': max((l['exit_at'] for l in closed if l.get('exit_at')),
+                           default=None),
+            'exit_price': biggest.get('exit_price') if biggest else None,
+            'exit_id': biggest.get('exit_id') if biggest else None,
+            'outcome': ('closed' if closed and len(closed) == len(group)
+                        else group[0].get('outcome') if not closed
+                        else 'partial'),
+            'exit_grade_exact': exact,
+            'exit_grade': round_grade(exact) if exact is not None else 'none',
+            'exit_conditions': ((biggest.get('exit_conditions') or {})
+                                if biggest else {}),
+            'exit_tags_good': sorted({t for l in group
+                                      for t in (l.get('exit_tags_good') or [])}),
+            'exit_tags_bad': sorted({t for l in group
+                                     for t in (l.get('exit_tags_bad') or [])}),
+            'exit_note': ' | '.join(l['exit_note'] for l in group
+                                    if l.get('exit_note')),
+        })
+        base['same_day'] = (all(l.get('same_day') for l in closed)
+                            if closed else None)
+        rows.append(base)
+
+    return rows
+
+
+# ─── SELFTEST ──────────────────────────────────────────────────────────────────
+
+def selftest():
+    """py -3 pairing.py --selftest"""
+    fails = []
+
+    def ck(name, cond, extra=''):
+        if cond:
+            print(f'  ok   {name}')
+        else:
+            print(f'  FAIL {name} {extra}')
+            fails.append(name)
+
+    # -- round_grade: the .60 boundary --
+    ck('a .5 does not earn the next grade', round_grade(2.5) == 2)
+    ck('a .59 does not earn it either', round_grade(2.59) == 2)
+    ck('exactly .60 earns it', round_grade(2.60) == 3)
+    ck('a .61 earns it', round_grade(2.61) == 3)
+    ck('a whole grade is unchanged', round_grade(3.0) == 3)
+    ck('zero stays zero', round_grade(0.0) == 0)
+    ck('a top grade cannot be pushed past 4', round_grade(4.0) == 4)
+    ck('None passes through', round_grade(None) is None)
+    ck('.60 survives its own float representation',
+       round_grade(0.6) == 1 and round_grade(1.6) == 2)
+
+    # -- the weighted mean --
+    W = [{'exit_grade': 4, 'qty': 4}, {'exit_grade': 2, 'qty': 3},
+         {'exit_grade': 1, 'qty': 3}]
+    ck('quantity weights the mean, not leg count',
+       abs(_weighted_exit_grade(W) - 2.5) < 1e-9, _weighted_exit_grade(W))
+    ck('one leg is its own mean',
+       _weighted_exit_grade([{'exit_grade': 3, 'qty': 10}]) == 3)
+    ck("a 'none' exit is skipped, not read as zero",
+       _weighted_exit_grade([{'exit_grade': 4, 'qty': 5},
+                             {'exit_grade': 'none', 'qty': 5}]) == 4)
+    ck('an all-open entry has no exit grade',
+       _weighted_exit_grade([{'exit_grade': 'none', 'qty': 5}]) is None)
+    ck('a zero-qty leg cannot vote',
+       _weighted_exit_grade([{'exit_grade': 4, 'qty': 0},
+                             {'exit_grade': 1, 'qty': 5}]) == 1)
+
+    # -- the collapse --
+    def leg(eid, xid, qty, xg, pl, hold=10.0, eg=3):
+        return {'symbol': 'SPY', 'ticker': 'SPY', 'entry_id': eid,
+                'exit_id': xid, 'qty': qty, 'entry_grade': eg,
+                'exit_grade': xg, 'pl': round(pl, 2), 'pl_exact': pl,
+                'entry_cash': qty * 100.0, 'exit_cash': qty * 100.0 + pl,
+                'hold_minutes': hold, 'same_day': True, 'outcome': 'closed',
+                'entry_at': '2026-09-28T10:00:00',
+                'exit_at': '2026-09-28T1{}:00:00'.format(xid),
+                'exit_price': 100.0, 'exit_conditions': {'w': xid},
+                'exit_tags_good': ['g{}'.format(xid)], 'exit_tags_bad': [],
+                'exit_note': '', 'entry_conditions': {}, 'entry_tags_good': [],
+                'entry_tags_bad': [], 'entry_note': ''}
+
+    ladder = [leg('E1', '1', 4, 4, 40.0, hold=10),
+              leg('E1', '2', 3, 2, -9.0, hold=20),
+              leg('E1', '3', 3, 1, -6.0, hold=30)]
+    rows = collapse_to_entries(ladder)
+    ck('three rungs become one decision row', len(rows) == 1)
+    r = rows[0]
+    ck('the collapsed row keeps the exact weighted grade',
+       abs(r['exit_grade_exact'] - 2.5) < 1e-9, r['exit_grade_exact'])
+    ck('and grids at 2, because .5 is under the bar', r['exit_grade'] == 2)
+    ck('P/L is the sum of the rungs', r['pl'] == 25.0, r['pl'])
+    ck('quantity is the whole position', r['qty'] == 10)
+    ck('n_legs records the instalments', r['n_legs'] == 3)
+    ck('hold time is quantity-weighted',
+       abs(r['hold_minutes'] - 19.0) < 1e-9, r['hold_minutes'])
+    ck('conditions come from the largest rung',
+       r['exit_conditions'] == {'w': '1'}, r['exit_conditions'])
+    ck('tags are unioned across rungs',
+       r['exit_tags_good'] == ['g1', 'g2', 'g3'], r['exit_tags_good'])
+    ck('the entry grade is untouched', r['entry_grade'] == 3)
+
+    # -- the cases that must NOT change --
+    plain = [leg('E9', '1', 10, 3, 50.0)]
+    p = collapse_to_entries(plain)[0]
+    ck('an unladdered trade is unchanged by the collapse',
+       len(collapse_to_entries(plain)) == 1 and p['exit_grade'] == 3
+       and p['pl'] == 50.0 and p['n_legs'] == 1)
+    ck('its exact grade is the integer it always was',
+       p['exit_grade_exact'] == 3.0)
+
+    two_entries = [leg('E1', '1', 5, 4, 20.0, eg=4),
+                   leg('E2', '1', 5, 4, 20.0, eg=1)]
+    ck('two entries closed by one sell stay two rows',
+       len(collapse_to_entries(two_entries)) == 2)
+    ck('and keep their own entry grades',
+       [x['entry_grade'] for x in collapse_to_entries(two_entries)] == [4, 1])
+
+    # -- partial ladders --
+    open_leg = leg('E1', None, 6, 'none', 0.0)
+    open_leg.update({'exit_id': None, 'pl': None, 'pl_exact': None,
+                     'exit_cash': None, 'hold_minutes': None,
+                     'outcome': 'open', 'exit_at': None})
+    half = [leg('E1', '1', 4, 4, 40.0), open_leg]
+    h = collapse_to_entries(half)[0]
+    ck('a half-closed ladder is one row', len(collapse_to_entries(half)) == 1)
+    ck('its grade counts only the rung that fired', h['exit_grade'] == 4)
+    ck('qty_closed is less than qty while rungs are pending',
+       h['qty_closed'] == 4 and h['qty'] == 10)
+    ck("its outcome reads 'partial'", h['outcome'] == 'partial', h['outcome'])
+    ck('P/L counts the closed part only', h['pl'] == 40.0)
+    ck('pl_pct is not diluted by the open remainder',
+       abs(h['pl_pct'] - 0.1) < 1e-9, h['pl_pct'])
+
+    wide = [leg('E1', '1', 9, 3, 10.0), leg('E1', '2', 1, 0, -1.0)]
+    w = collapse_to_entries(wide)[0]
+    ck('a small bad rung cannot drag down a mostly-good exit',
+       abs(w['exit_grade_exact'] - 2.7) < 1e-9 and w['exit_grade'] == 3,
+       w['exit_grade_exact'])
+
+    print()
+    if fails:
+        print('SELFTEST FAILED: {} case(s): {}'.format(
+            len(fails), ', '.join(fails)))
+        return False
+    print('SELFTEST PASSED')
+    return True
+
+
 if __name__ == '__main__':
+    import sys
+    if '--selftest' in sys.argv:
+        sys.exit(0 if selftest() else 1)
     import pprint
     pprint.pprint(reconcile())

@@ -13,6 +13,28 @@ THE GRID
   pairing layer opens a position on whatever fill comes first, so every exit
   necessarily has an entry.
 
+ONE ROW PER DECISION, NOT PER LEG
+  The grid is built on pairing.collapse_to_entries(), so an entry closed by
+  three ladder rungs is ONE row, not three. Without that, a laddered trade
+  would paint three cells and count three times against an unladdered one,
+  which is a weighting no one chose. Several ENTRIES sharing an exit still
+  produce several rows -- those were separate decisions.
+
+  The column is the quantity-weighted mean of the rungs' exit grades, put on
+  the integer axis by pairing.round_grade: .60 and up earns the next grade,
+  below it does not. The unrounded value rides along as exit_grade_exact and
+  is what any per-trade average should read. Rounding belongs to the grid,
+  where 2.5-against-2.0 is noise across many trades; it does not belong to
+  the arithmetic.
+
+  by='leg' restores the old leg-level grid for comparison. The two modes do
+  NOT agree on the existing history: four entries were already closed in
+  instalments by hand (see pairing.collapse_to_entries), so 208 legs become
+  202 decision rows. Total P/L is identical either way -- the collapse moves
+  no money -- but the overall win rate reads 64.58% by decision against
+  65.66% by leg, because a scale-out that worked used to be counted twice.
+  The decision number is the true one.
+
 LAYERS
   A layer is a filter on a condition recorded at the entry or the exit --
   the 5/12 position, the 1H multi-timeframe, whether S/R/P was followed. The
@@ -132,15 +154,28 @@ def _cell(legs):
     }
 
 
-def build(legs=None, filters=None, sparse_below=3, **narrow):
+def build(legs=None, filters=None, sparse_below=3, by='entry', **narrow):
     """Compute the grid. Returns cells, margins and a summary.
 
-    sparse_below marks any cell with fewer than this many legs, so the UI can
-    render it as unreliable instead of as a finding.
+    sparse_below marks any cell with fewer than this many trades, so the UI
+    can render it as unreliable instead of as a finding.
+
+    by='entry' (the default) grids one row per entry decision; by='leg' grids
+    the raw pairing legs, which is the pre-ladder behaviour.
+
+    COLLAPSE BEFORE FILTER, deliberately. Filtering legs first could keep one
+    rung of a ladder and drop another, leaving a decision represented by a
+    fraction of itself with a grade and a P/L that describe neither the trade
+    nor the filter. Collapsing first keeps a decision atomic: a row is in or
+    out whole.
     """
     if legs is None:
         legs = pairing.build_legs()
-    legs = apply_filters(legs, filters, **narrow)
+    n_legs_in = len(legs)
+    if by == 'entry':
+        legs = pairing.collapse_to_entries(legs)
+    n_rows = len(legs)                 # before filtering, so the collapse
+    legs = apply_filters(legs, filters, **narrow)   # count is not inflated
 
     buckets = {(e, x): [] for e in GRADES for x in EXIT_KEYS}
     ungraded = 0
@@ -185,8 +220,15 @@ def build(legs=None, filters=None, sparse_below=3, **narrow):
         'row_margin': row_margin,
         'col_margin': col_margin,
         'summary': {
+            'trades_in_grid': placed,
+            # Kept under the old name so nothing reading it breaks. In
+            # by='entry' these are decisions, not legs; the two differ only
+            # once a laddered trade exists.
             'legs_in_grid': placed,
             'legs_excluded_ungraded': ungraded,
+            'grid_unit': 'entry' if by == 'entry' else 'leg',
+            'legs_read': n_legs_in,
+            'legs_collapsed': (n_legs_in - n_rows) if by == 'entry' else 0,
             'overall': _cell(legs),
             'populated_cells': populated,
             'sparse_cells': sparse_cells,
