@@ -40,7 +40,7 @@ Even split (capital/N per name) is the one sizing where simultaneous full
 deployment across the basket cannot exceed capital, so its pooled equity
 curve is internally consistent without a shared cash constraint.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -51,11 +51,86 @@ ET = ZoneInfo('America/New_York')
 # into a plain dict and lose the self-extending lookup, reintroducing the
 # KeyError this was meant to remove.
 import halflife as _hlf
+import levels as _lv
+import exit_ladder as _el
 TF_MINUTES = _hlf.TF_MINUTES
 
 
 def _t(bar):
     return datetime.fromisoformat(bar['time'])
+
+
+# ─── LADDER SUPPORT (design/07 §6) ────────────────────────────────────────────
+
+ATR_PERIOD = 14              # backtest_context.ATR_PERIOD / levels.atr default
+RTH_OPEN, RTH_CLOSE = dtime(9, 30), dtime(16, 0)
+
+
+def _synth_day(day, rth_bars):
+    """One synthesized daily bar from a session's RTH intraday bars.
+
+    A DELIBERATE DUPLICATE of backtest_context._synth_daily, per-day instead of
+    per-series, and repeated rather than imported for the same reason
+    backtest_sweep._aggregate is repeated: importing backtest_context would pull
+    heatmap -> pairing -> journal into every process-pool worker, and run_symbol
+    is what the pool runs. The caveat there applies here unchanged — these are
+    not Alpaca's dailies, the open and close are the first and last RTH bar
+    rather than the auction prints, so ATR runs a hair narrow. The error is the
+    same sign every day, which is what makes ATR MULTIPLES usable anyway.
+    """
+    highs = [b.get('high') for b in rth_bars if b.get('high') is not None]
+    lows = [b.get('low') for b in rth_bars if b.get('low') is not None]
+    if not highs or not lows:
+        return None
+    return {'time': day.isoformat(), 'date': day,
+            'open': rth_bars[0].get('open'), 'close': rth_bars[-1].get('close'),
+            'high': max(highs), 'low': min(lows),
+            'volume': sum(b.get('volume') or 0.0 for b in rth_bars)}
+
+
+def resolve_ladder_template(template, qty, anchor, atr):
+    """A sweep-wide ladder TEMPLATE -> a concrete ladder for one entry.
+
+    A template cannot carry absolute quantities or absolute prices: it has to
+    mean the same thing on SPY at 600 and on a $40 name, in a position whose
+    size the budget decided. So a template rung carries `frac` — a fraction of
+    the entry quantity — and its `at.kind` must be 'atr'. A 'price' rung is
+    per-trade discretion and means nothing applied to every symbol in a sweep,
+    so it is REFUSED rather than silently swept.
+
+    Returns None when no ladder can be built for this entry: no ATR yet (thin
+    daily history at the start of a window), or every rung rounded down to zero
+    shares on a small position. The caller COUNTS those. A laddered sweep that
+    quietly ran unladdered on a third of its entries is a result that means
+    nothing, and the count is the only thing that exposes it.
+    """
+    if not template:
+        return None
+    rungs, used = [], 0
+    for i, r in enumerate(template.get('rungs') or []):
+        at = dict(r.get('at') or {})
+        if at.get('kind') != 'atr':
+            raise ValueError(f'ladder template rung {i}: at.kind must be "atr"; '
+                             f'an absolute price cannot be swept across symbols')
+        frac = float(r.get('frac', 0))
+        if not 0 < frac <= 1:
+            raise ValueError(f'ladder template rung {i}: frac must be in (0, 1], '
+                             f'got {frac}')
+        q = min(int(qty * frac), qty - used)
+        if q < 1:
+            continue
+        used += q
+        rungs.append({'id': f'r{i + 1}', 'qty': q, 'at': at})
+
+    rt = dict(template.get('ratchet') or {})
+    if not rungs and not rt.get('enabled'):
+        return None
+    if atr is None:
+        return None
+    return _el.make_ladder(sleeve='shares', anchor=anchor, atr=atr,
+                           position_qty=qty, rungs=rungs,
+                           ratchet=rt or None,
+                           remainder=template.get('remainder', 'engine'))
 
 
 # ─── SINGLE-SYMBOL REPLAY ─────────────────────────────────────────────────────
@@ -65,7 +140,7 @@ PROGRESS_EVERY_BARS = 25
 
 def run_symbol(engine, symbol, bars_primary, bars_macro=None,
                budget_dollars=1000.0, slippage_bps=2.0, min_window=None,
-               progress=None, compound=False):
+               progress=None, compound=False, ladder=None):
     """Replay one symbol through the engine.
 
     compound=False: every entry sizes off the pinned budget (original).
@@ -77,9 +152,18 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
     winners fund losers' budgets; sleeve-level is the version that stays
     per-symbol parallel. State it when reading results, don't discover it.
 
+    ladder: a TEMPLATE (see resolve_ladder_template) applied at every entry, or
+    None for the all-at-once behaviour this function has always had. With a
+    ladder, ONE ENTRY PRODUCES SEVERAL TRADE ROWS — one per partial exit — each
+    carrying `entry_id`, `leg` and `qty_left`. They are LEGS, not decisions:
+    n_trades, win_rate and expectancy all count legs, so anything that means to
+    count decisions must de-duplicate on entry_id (design/07 §5). This is the
+    same distinction pairing.py draws on live fills, deliberately.
+
     Returns {'trades': [...], 'daily_marks': {date_iso: unrealized $ at day
-    close}, 'evals': int}. Trades carry entry/exit time+price, direction,
-    pnl_dollars, ret_pct, exit_reason, bars_held.
+    close}, 'evals': int, 'ladder': {'unbuilt': int, 'fires': {kind: n}}}.
+    Trades carry entry/exit time+price, direction, pnl_dollars, ret_pct,
+    exit_reason, bars_held.
 
     progress(done_bars, total_bars, 'bars'), if given, fires every
     PROGRESS_EVERY_BARS. A single-symbol backtest otherwise reports NOTHING
@@ -105,6 +189,17 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
     macro_ptr = 0              # advancing pointer into bars_macro
     evals = 0
 
+    # Ladder state. `dailies` holds only COMPLETED prior sessions, so the ATR a
+    # ladder pins at entry never peeks at the range of the day it enters on.
+    ladder_state = None
+    entry_id = None
+    entry_seq = leg_seq = 0
+    ladder_unbuilt = 0
+    ladder_fires = {}
+    dailies = []
+    day_bars = []
+    day_date = None
+
     # FIDELITY: live evaluates EVERY bar close and lets the engine gate its
     # own warmup (it returns NONE cheaply on thin windows). Starting the
     # replay at full window depth would skip bars the live loop evaluates,
@@ -124,8 +219,19 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
         px *= (1 + slip) if side_is_buy else (1 - slip)
         return px, _t(bars_primary[i + 1])
 
-    def _close_trade(i, reason, force_px=None, force_t=None):
+    def _book_close(i, reason, close_qty, force_px=None, force_t=None):
+        """Book `close_qty` units out of the open position at the next bar's open.
+
+        close_qty == qty closes the position and resets the entry state, which is
+        every engine exit and the only thing that happened here before ladders.
+        A smaller quantity leaves the position open with the remainder, so the
+        engine still governs the runner and the daily mark below shrinks with it.
+        """
         nonlocal held, entry_px, entry_t, qty, entry_bar_i, sleeve
+        nonlocal leg_seq, ladder_state
+        close_qty = int(min(close_qty, qty))
+        if close_qty < 1:
+            return
         if force_px is not None:
             xpx, xt = force_px, force_t
         else:
@@ -138,22 +244,34 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
             else:
                 xpx, xt = f
         sign = 1 if held == 'long' else -1
-        pnl = (xpx - entry_px) * qty * sign
+        pnl = (xpx - entry_px) * close_qty * sign
         sleeve += pnl
+        leg_seq += 1
+        qty -= close_qty
         trades.append({
             'symbol': symbol, 'direction': held,
             'entry_time': entry_t.isoformat(), 'entry_price': round(entry_px, 4),
             'exit_time': xt.isoformat(), 'exit_price': round(xpx, 4),
-            'qty': qty, 'pnl_dollars': round(pnl, 2),
-            'notional': round(entry_px * qty, 2),
-            'ret_pct': round(pnl / (entry_px * qty) * 100, 4) if qty else 0.0,
+            'qty': close_qty, 'pnl_dollars': round(pnl, 2),
+            'notional': round(entry_px * close_qty, 2),
+            'ret_pct': (round(pnl / (entry_px * close_qty) * 100, 4)
+                        if close_qty else 0.0),
             'exit_reason': reason, 'bars_held': i - entry_bar_i,
             'exit_date': xt.astimezone(ET).date().isoformat(),
+            # Legs of one entry share entry_id. leg is 1-based; qty_left == 0
+            # marks the leg that actually closed the position.
+            'entry_id': entry_id, 'leg': leg_seq, 'qty_left': qty,
         })
-        held = None
-        entry_px = entry_t = None
-        entry_bar_i = None
-        qty = 0
+        if qty <= 0:
+            held = None
+            entry_px = entry_t = None
+            entry_bar_i = None
+            qty = 0
+            ladder_state = None
+
+    def _close_trade(i, reason, force_px=None, force_t=None):
+        """Full exit: the whole remaining position. Unchanged behaviour."""
+        _book_close(i, reason, qty, force_px=force_px, force_t=force_t)
 
     for i in range(start_i, n):
         if progress and (i - start_i) % PROGRESS_EVERY_BARS == 0:
@@ -161,6 +279,22 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
         bar = bars_primary[i]
         bar_close = _t(bar) + timedelta(minutes=tf_min)
         now_et = bar_close.astimezone(ET)
+
+        # Roll the synthesized daily series forward. A session is appended only
+        # once it is COMPLETE, so `dailies` never contains the session in
+        # progress — an ATR that saw today's range would be lookahead, and a
+        # ladder pinned on it would be tuned by information the trade did not
+        # have. Cheap enough to do unconditionally; skipped work would only
+        # matter on a ladderless run, which pays two comparisons per bar.
+        _d = now_et.date()
+        if day_date is not None and _d != day_date:
+            _synth = _synth_day(day_date, day_bars)
+            if _synth:
+                dailies.append(_synth)
+            day_bars = []
+        day_date = _d
+        if RTH_OPEN <= _t(bar).astimezone(ET).time() < RTH_CLOSE:
+            day_bars.append(bar)
 
         w0 = max(0, i - window + 1)
         win_primary = bars_primary[w0:i + 1]
@@ -200,6 +334,26 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
             if ekind == 'structural':
                 blocked_day = today      # stop-out: no same-day re-entry
 
+        # ── ladder: partial exits (design/07 §4) ──
+        # Order mirrors _evaluate_ticker exactly. The engine's exit above has
+        # already closed the position if it fired, so reaching here with a
+        # position open means the engine had nothing to say and the ladder may
+        # act. Decided on this bar's CLOSE and filled at the next bar's open —
+        # the same contract every other exit in this file honours, which is the
+        # whole reason a ladder is replayable at all.
+        if held and ladder_state is not None and qty > 0:
+            _r = _el.evaluate(ladder_state, held, bar['close'], qty)
+            ladder_state = _r['ladder']
+            for _intent in _r['intents']:
+                ladder_fires[_intent['kind']] = (
+                    ladder_fires.get(_intent['kind'], 0) + 1)
+                if _intent['rung_ids'] and ladder_state is not None:
+                    ladder_state = _el.mark_fired(ladder_state,
+                                                  _intent['rung_ids'])
+                _book_close(i, _intent['kind'], _intent['qty'])
+                if held is None:
+                    break
+
         # ── entries (mirrors the live guards) ──
         if held is None and (a.endswith('ENTER_LONG')
                              or a.endswith('ENTER_SHORT')):
@@ -219,6 +373,13 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
                         entry_px, entry_t = px, t
                         entry_bar_i = i
                         qty = q
+                        entry_seq += 1
+                        entry_id = f'{symbol}#{entry_seq}'
+                        leg_seq = 0
+                        ladder_state = resolve_ladder_template(
+                            ladder, q, px, _lv.atr(dailies, ATR_PERIOD))
+                        if ladder is not None and ladder_state is None:
+                            ladder_unbuilt += 1
 
         # ── daily unrealized mark at each session's last bar ──
         is_last_of_day = (i + 1 >= n
@@ -238,7 +399,8 @@ def run_symbol(engine, symbol, bars_primary, bars_macro=None,
 
     if progress:
         progress(n_evals, n_evals, 'bars')
-    return {'trades': trades, 'daily_marks': daily_marks, 'evals': evals}
+    return {'trades': trades, 'daily_marks': daily_marks, 'evals': evals,
+            'ladder': {'unbuilt': ladder_unbuilt, 'fires': ladder_fires}}
 
 
 # ─── PORTFOLIO AGGREGATION + METRICS ──────────────────────────────────────────
@@ -255,7 +417,8 @@ def _resolve_budget(sym, capital, alloc_pct, alloc_dollars, budget_by_symbol):
 
 def run_basket(engine, bars_by_symbol, macro_by_symbol=None,
                capital=100000.0, alloc_pct=1.0, slippage_bps=2.0,
-               alloc_dollars=None, budget_by_symbol=None, compound=False):
+               alloc_dollars=None, budget_by_symbol=None, compound=False,
+               ladder=None):
     """Replay every symbol independently on a pinned per-position budget,
     then aggregate. Budget precedence per symbol: budget_by_symbol >
     alloc_dollars > alloc_pct of capital. Independent budgets mirror the
@@ -267,6 +430,7 @@ def run_basket(engine, bars_by_symbol, macro_by_symbol=None,
     all_trades = []
     marks_by_day = {}
     total_evals = 0
+    lad_unbuilt, lad_fires = 0, {}
 
     for sym, bars in bars_by_symbol.items():
         if not bars:
@@ -275,9 +439,13 @@ def run_basket(engine, bars_by_symbol, macro_by_symbol=None,
                                  budget_by_symbol)
         r = run_symbol(engine, sym, bars, macro_by_symbol.get(sym),
                        budget_dollars=budget, slippage_bps=slippage_bps,
-                       compound=compound)
+                       compound=compound, ladder=ladder)
         all_trades.extend(r['trades'])
         total_evals += r['evals']
+        ls = r.get('ladder') or {}
+        lad_unbuilt += ls.get('unbuilt', 0)
+        for k, v in (ls.get('fires') or {}).items():
+            lad_fires[k] = lad_fires.get(k, 0) + v
         for day, m in r['daily_marks'].items():
             marks_by_day[day] = marks_by_day.get(day, 0.0) + m
 
@@ -290,6 +458,11 @@ def run_basket(engine, bars_by_symbol, macro_by_symbol=None,
                         slippage_bps=slippage_bps)
     m['evals'] = total_evals
     m['symbols'] = len(bars_by_symbol)
+    if ladder is not None:
+        # Surfaced, not buried: an entry whose ladder could not be built traded
+        # unladdered, and a sweep row that does not say how often that happened
+        # is not comparable to the row beside it (design/07 §6).
+        m['ladder'] = {'unbuilt_entries': lad_unbuilt, 'fires': lad_fires}
     return {'trades': all_trades, 'equity_curve': equity, 'metrics': m}
 
 
@@ -309,15 +482,19 @@ def run_basket(engine, bars_by_symbol, macro_by_symbol=None,
 
 def _replay_one(args):
     """Worker body. args = (engine_name, symbol, bars, macro, budget,
-    slip, compound). Returns (symbol, result_dict) or (symbol, {'error':
-    str}). Never raises out: one bad symbol must not kill the pool."""
-    engine_name, symbol, bars, macro, budget, slip, compound = args
+    slip, compound, ladder). Returns (symbol, result_dict) or (symbol,
+    {'error': str}). Never raises out: one bad symbol must not kill the pool.
+
+    `ladder` is a plain dict template and pickles cleanly; the concrete ladder
+    is built inside run_symbol, per entry, so nothing stateful crosses the
+    process boundary."""
+    engine_name, symbol, bars, macro, budget, slip, compound, ladder = args
     try:
         from engines_bootstrap import registry
         engine = registry.get(engine_name)
         r = run_symbol(engine, symbol, bars, macro,
                        budget_dollars=budget, slippage_bps=slip,
-                       compound=compound)
+                       compound=compound, ladder=ladder)
         return symbol, r
     except Exception as e:
         return symbol, {'error': str(e)}
@@ -327,7 +504,7 @@ def run_basket_parallel(engine_name, bars_by_symbol, macro_by_symbol=None,
                         capital=100000.0, alloc_pct=1.0, slippage_bps=2.0,
                         max_workers=None, progress=None,
                         alloc_dollars=None, budget_by_symbol=None,
-                        compound=False):
+                        compound=False, ladder=None):
     """Same contract as run_basket, but replays symbols across a process pool.
 
     Takes engine_name (str), not an engine object, because the object has to
@@ -367,12 +544,12 @@ def run_basket_parallel(engine_name, bars_by_symbol, macro_by_symbol=None,
     # catch up.
     if isinstance(engine_name, dict):
         work = [(engine_name[sym], sym, bars, macro_by_symbol.get(sym),
-                 _b(sym), slippage_bps, compound)
+                 _b(sym), slippage_bps, compound, ladder)
                 for sym, bars in bars_by_symbol.items()
                 if bars and sym in engine_name]
     else:
         work = [(engine_name, sym, bars, macro_by_symbol.get(sym),
-                 _b(sym), slippage_bps, compound)
+                 _b(sym), slippage_bps, compound, ladder)
                 for sym, bars in bars_by_symbol.items() if bars]
     total = len(work)
 
@@ -536,8 +713,18 @@ def compute_metrics(trades, equity_curve, capital, slippage_bps=0.0,
         s['n'] += 1
         s['pnl'] = round(s['pnl'] + t['pnl_dollars'], 2)
 
+    # n_trades counts LEGS. Without a ladder a leg IS a trade and these are
+    # equal, which is why n_trades keeps its name and its meaning for every
+    # result recorded before ladders existed. With one, n_entries is the count
+    # of decisions and win_rate/expectancy remain per-leg — stated here so a
+    # laddered row is never read as if it were an unladdered one (design/07 §5).
+    ids = {t.get('entry_id') for t in trades if t.get('entry_id')}
+    n_entries = len(ids) if ids else n
+
     m = {
         'n_trades': n,
+        'n_entries': n_entries,
+        'legs_per_entry': round(n / n_entries, 2) if n_entries else 0.0,
         'win_rate_pct': round(len(wins) / n * 100, 2) if n else 0.0,
         'avg_win': round(_mean([t['pnl_dollars'] for t in wins]), 2),
         'avg_loss': round(_mean([t['pnl_dollars'] for t in losses]), 2),

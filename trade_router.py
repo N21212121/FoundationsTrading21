@@ -186,9 +186,17 @@ def _option_leg(contract, contracts):
             'type': contract['type']}
 
 
-def plan_exit(position, sleeve='both'):
+def plan_exit(position, sleeve='both', qty=None):
     """Closing legs for an open position. sleeve: 'both'|'shares'|'options'.
-    All-at-once, no stepping out.
+
+    qty=None closes the named sleeve(s) out ENTIRELY. That is every engine exit
+    and every manual sell, and it is the behaviour this function has always had.
+
+    An int closes AT MOST that many units of ONE sleeve -- a scale-out rung or a
+    ratchet, from exit_ladder (design/07). A qty with sleeve='both' is refused
+    rather than guessed at: shares and contracts are different units and a 3
+    cannot mean both. That refusal is the only thing standing between a two-sleeve
+    combo position and a rung that sells three of each.
 
     Direction-aware on the share leg: a long position SELLS to close; a
     short-shares position (shares_only engines with ALLOW_SHORTS on) BUYS
@@ -199,16 +207,25 @@ def plan_exit(position, sleeve='both'):
     are always long premium in this system (BUY_TO_OPEN only), so the
     option leg always sells, regardless of direction."""
     direction = (position.get('direction') or 'long').lower()
+    if qty is not None:
+        if sleeve == 'both':
+            raise ValueError("a partial exit must name one sleeve, 'shares' or "
+                             "'options'; 'both' would apply one quantity to two "
+                             "different units")
+        qty = int(qty)
+        if qty < 1:
+            return []
     legs = []
     if sleeve in ('both', 'options') and position.get('option_contracts', 0) > 0:
+        n = int(position['option_contracts'])
         legs.append({'kind': 'option', 'side': 'sell',
                      'symbol': position['option_symbol'],
-                     'contracts': position['option_contracts']})
+                     'contracts': n if qty is None else min(n, qty)})
     sh = int(position.get('shares') or 0)
     if sleeve in ('both', 'shares') and sh > 0:
         legs.append({'kind': 'shares',
                      'side': 'buy' if direction == 'short' else 'sell',
-                     'qty': sh})
+                     'qty': sh if qty is None else min(sh, qty)})
     return legs
 
 

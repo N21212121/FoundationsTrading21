@@ -25,6 +25,7 @@ from flask import Flask, jsonify, request
 import config_manager as cm
 import signal_engine as se          # still used by /api/bars for chart EMAs
 import trade_router as tr
+import exit_ladder as el
 from alpaca_manager import AlpacaManager
 from bar_cache import BarCache
 from engines_bootstrap import resolver, registry
@@ -402,8 +403,17 @@ def _do_entry(ticker, direction, cfg, source='engine', allow_options=True,
             'failed': len(result['failed'])}
 
 
-def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None):
+def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None,
+             qty=None, exit_kind=None):
     """Execute an exit for one position sleeve and update state.
+
+    qty=None is a FULL exit of the sleeve and is unchanged in every respect.
+    An int is a PARTIAL exit -- a ladder rung or a ratchet (design/07) -- and
+    differs in exactly one way that matters: state is decremented by what the
+    broker CONFIRMED, never by what was planned. See the state block below.
+
+    exit_kind overrides the journal's exit_kind condition, so a rung reads as
+    'rung' and a ratchet as 'ratchet' rather than inheriting the engine's.
 
     Guarded against duplicate fires: if an exit is already in flight on this
     ticker, return immediately. The monitor loop also skips in-flight tickers,
@@ -418,9 +428,13 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None):
         _exiting.add(ticker)
 
     try:
-        legs = tr.plan_exit(p, sleeve=sleeve)
+        legs = tr.plan_exit(p, sleeve=sleeve, qty=qty)
         if not legs:
             return {'ok': False, 'reason': 'nothing to sell for that sleeve'}
+
+        if exit_kind:
+            conditions = dict(conditions or {}, exit_kind=exit_kind)
+        filled_opt = filled_sh = 0
 
         # Snapshot entry prices BEFORE we clear state, for P/L.
         opt_entry = float(p.get('option_entry_premium') or 0)
@@ -452,7 +466,11 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None):
             fill = f.get('fill') or {}
             xprice = fill.get('filled_avg_price')
             if leg['kind'] == 'option':
-                xqty = int(fill.get('filled_qty') or opt_qty)
+                # Fallback is the LEG's quantity, not the position's: on a
+                # partial those differ, and opt_qty would over-report.
+                xqty = int(fill.get('filled_qty') or leg.get('contracts')
+                           or opt_qty)
+                filled_opt += xqty
                 exitpx = float(xprice) if xprice not in (None, '') else None
                 pnl_d = ((exitpx - opt_entry) * xqty * 100
                          if exitpx is not None and opt_entry else None)
@@ -473,7 +491,9 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None):
                     filled_at=datetime.now(ET).replace(tzinfo=None),
                     conditions=dict(conditions or {}), note=trigger)
             else:
-                xqty = int(fill.get('filled_qty') or sh_qty)
+                xqty = int(fill.get('filled_qty') or leg.get('qty')
+                           or sh_qty)
+                filled_sh += xqty
                 exitpx = float(xprice) if xprice not in (None, '') else None
                 pnl_d = ((exitpx - sh_entry) * xqty * sh_sign
                          if exitpx is not None and sh_entry else None)
@@ -503,19 +523,35 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None):
         with _state_lock:
             pos = _positions()       # re-read; another path may have touched it
             p = pos.get(ticker, p)
-            for leg in legs:
-                if leg['kind'] == 'option':
-                    p['option_contracts'] = 0
-                    p['option_symbol'] = ''
-                else:
-                    p['shares'] = 0
+            if qty is None:
+                for leg in legs:
+                    if leg['kind'] == 'option':
+                        p['option_contracts'] = 0
+                        p['option_symbol'] = ''
+                    else:
+                        p['shares'] = 0
+            else:
+                # PARTIAL: decrement by CONFIRMED fills only. A rejected rung has
+                # to leave state untouched so the ladder retries it on the next
+                # close (design/07 §8). Zeroing or decrementing on an unfilled
+                # sell would orphan the shares at the broker and shrink the
+                # position the ladder still believes it owns -- and unlike a full
+                # exit, there is no subsequent close to paper over the error.
+                if filled_opt:
+                    left = max(0, int(p.get('option_contracts') or 0) - filled_opt)
+                    p['option_contracts'] = left
+                    if not left:
+                        p['option_symbol'] = ''
+                if filled_sh:
+                    p['shares'] = max(0, int(p.get('shares') or 0) - filled_sh)
             if not p.get('option_contracts') and not p.get('shares'):
                 pos.pop(ticker, None)
             else:
                 pos[ticker] = p
             _save_positions(pos)
 
-        return {'ok': True}
+        return {'ok': True, 'filled_options': filled_opt,
+                'filled_shares': filled_sh}
     finally:
         with _state_lock:
             _exiting.discard(ticker)
@@ -801,6 +837,100 @@ def _fetch_basket_bars(watch):
     return out
 
 
+# ─── EXIT LADDER (design/07) ────────────────────────────────────────────────────
+
+def _ladder_of(ticker):
+    with _state_lock:
+        return (_positions().get(ticker) or {}).get('ladder')
+
+
+def _persist_ladder(ticker, ladder):
+    """Write a ladder back onto its position.
+
+    Does nothing if the position is gone. A ladder outlives nothing: it is
+    discarded with the position it belongs to (design/07 §8), and re-creating
+    one here would attach a ladder to a ticker that is flat.
+    """
+    with _state_lock:
+        pos = _positions()
+        p = pos.get(ticker)
+        if not p:
+            return
+        p['ladder'] = ladder
+        pos[ticker] = p
+        _save_positions(pos)
+
+
+def _run_ladder(ticker, bar_close, ctx, d, act=True):
+    """Advance and fire one position's exit ladder. design/07 §4.
+
+    Called on EVERY closed bar, whatever the engine decided, because the
+    ratchet's high-water mark is a function of the bars and of nothing else.
+    Skipping the quiet bars would leave the floor reading off a stale high and
+    the ratchet would exit on a pullback that never happened.
+
+    Orders are placed only when `act` is True. On a bar where the engine fires
+    its own exit, the engine wins (§8): pending rungs are voided and the
+    position closes whole in one order rather than racing two.
+
+    The master switch is enforced by the caller. A ladder is unattended order
+    placement, so OBSERVE ONLY has to cover it or the switch does not mean what
+    it says.
+    """
+    with _state_lock:
+        p = dict(_positions().get(ticker) or {})
+    lad = p.get('ladder')
+    if not lad:
+        return
+
+    sleeve = lad.get('sleeve')
+    held = int((p.get('option_contracts') if sleeve == 'options'
+                else p.get('shares')) or 0)
+    direction = (p.get('direction') or 'long').lower()
+
+    try:
+        r = el.evaluate(lad, direction, bar_close, held)
+    except Exception as e:
+        cm.log_forensic('ladder', ticker=ticker, status='error', error=str(e))
+        return
+
+    lad = r['ladder']
+    notes = list(r['notes'])
+    if not act and el.pending(lad):
+        lad = el.void_rungs(lad, 'engine exit closed the position')
+        notes.append('engine exit takes precedence; pending rungs voided')
+
+    _persist_ladder(ticker, lad)
+    for n in notes:
+        cm.log_forensic('ladder', ticker=ticker, status='note', note=n)
+    if not act:
+        return
+
+    for intent in r['intents']:
+        res = _do_exit(ticker, sleeve,
+                       f'ladder {intent["kind"]}: {intent["reason"]}',
+                       is_stop=False,
+                       conditions=_cond_from_ctx(ctx, d),
+                       qty=intent['qty'], exit_kind=intent['kind'])
+        got = (res.get('filled_options', 0) if sleeve == 'options'
+               else res.get('filled_shares', 0))
+        if res.get('ok') and got:
+            # Commit only against broker truth. A rung stamped fired on a
+            # rejected order would never be retried.
+            if intent['rung_ids']:
+                cur = _ladder_of(ticker)
+                if cur:
+                    _persist_ladder(ticker,
+                                    el.mark_fired(cur, intent['rung_ids']))
+        else:
+            cm.log_forensic('ladder', ticker=ticker, status='unfilled',
+                            kind=intent['kind'],
+                            rungs=','.join(intent['rung_ids']),
+                            note='no confirmed fill; stays pending for the '
+                                 'next close',
+                            reason=res.get('reason', ''))
+
+
 def _evaluate_ticker(ticker, cfg, pos, bars):
     bars10 = bars.get('primary')
     if not bars10:
@@ -840,13 +970,25 @@ def _evaluate_ticker(ticker, cfg, pos, bars):
                + ('engine_enabled' if _engine_enabled else 'OBSERVE ONLY')),
     )
 
-    if not _engine_enabled or d['action'] == 'NONE':
+    if not _engine_enabled:
         return
 
     a = _invert_action(d['action']) if INVERT_SIGNALS else d['action']
+    engine_exiting = a.startswith('EXIT_LONG') or a.startswith('EXIT_SHORT')
+
+    # LADDER (design/07 §4). Runs on every closed bar, including the ones where
+    # the engine says NONE -- which is most of them, and all of the ones a
+    # scale-out cares about. Never inverted: a ladder is priced off the real
+    # position, not off the engine's mirrored worldview.
+    _run_ladder(ticker, float(bars10[-1]['close']), ctx, d,
+                act=not engine_exiting)
+
+    if d['action'] == 'NONE':
+        return
+
     # Exits are never gated by per-ticker pause (design A: pause blocks
     # entries only; open positions keep full exit protection).
-    if a.startswith('EXIT_LONG') or a.startswith('EXIT_SHORT'):
+    if engine_exiting:
         ekind = d.get('exit_kind') or 'ride_end'
         is_stop = (ekind == 'structural')
         # Engines that explain themselves (flip.reason) win over the generic
