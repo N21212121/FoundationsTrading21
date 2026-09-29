@@ -292,15 +292,17 @@ Seven steps, derived from the measured counts rather than invented.
 | `--fs-body` | 13px | 13, 13.5, 14 | 16 |
 | `--fs-lg` | 15px | 15, 16 | 10 |
 | `--fs-xl` | 18px | 17, 18 | 3 |
-| `--fs-display` | 22px | 19 | 5 |
+| `--fs-display` | 20px | 19 | 5 |
 
 The two collapses that matter are **11.5 → 11 (47 declarations)** and
 **12.5 → 12 (29)**. Both are pure find-replace with no judgement call, and
 together with their partners they normalise 210 of 259 declarations. Do these
 before anything else in this section.
 
-`19px → 22px` is a bump, not a collapse: 19px sitting next to 15px is not
-hierarchy, it is noise.
+`19px → 20px` is a bump, not a collapse: 19px sitting next to 15px is not
+hierarchy, it is noise. It stops at 20 rather than the 22 first drafted
+because those numbers are set in Consolas, whose digits are wider, and the
+KPI tiles they sit in are narrow enough to wrap.
 
 `body`'s declared 14px (L34) is close to a lie — almost nothing inherits it,
 because `table` (L398), `input, select` (L387), `button` (L390) and `.kv`

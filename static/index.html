@@ -118,6 +118,49 @@
     --scrim:        rgba(var(--shadow-rgb),.44);
     --scrim-strong: rgba(var(--shadow-rgb),.55);
 
+    /* ═══ TYPE ═══════════════════════════════════════════════════════
+       Three faces, all already installed on Windows, so there is no webfont
+       and the app looks right with no network. Each stack falls through to
+       what the app used before, so a non-Windows browser degrades to the
+       old appearance rather than to something worse.
+
+       BAHNSCHRIFT is Windows' DIN 1451 -- the German industrial standard
+       face used on gauges, instrument panels and signage. It carries the
+       chrome: wordmark, tabs, section eyebrows, table headers. It is on
+       subject rather than merely different, because this application IS an
+       instrument panel.
+
+       CONSOLAS carries READOUTS ONLY -- the numbers you watch move. Not
+       every number: a mono face inside a sentence fights the prose voice,
+       and most numbers in this UI are inside sentences. The rule is the
+       same one the shadows follow. A readout is an instrument and gets the
+       instrument face; a number in a sentence does not.
+
+       SEGOE UI VARIABLE is the Windows 11 refresh of Segoe with optical
+       sizing, cleaner than plain Segoe UI at the 11-13px this app lives
+       at. */
+    --ff-chrome: 'Bahnschrift', 'Segoe UI Variable Text', 'Segoe UI',
+                 system-ui, sans-serif;
+    --ff-body:   'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+    --ff-num:    'Consolas', ui-monospace, monospace;
+
+    /* SEVEN SIZES, replacing fifteen. Four of the old ones -- 11, 11.5, 12
+       and 12.5px -- sat inside a 1.5px band and accounted for 81% of all
+       259 font-size declarations in the file. That is not a set of
+       decisions; it is four moments of "that looks a touch big" preserved
+       in amber, and collapsing them is what stops near-identical things
+       drifting apart.
+       --fs-display is 20px and not the 22 first drafted: the KPI numbers
+       are set in Consolas, whose digits are wider, and the tiles they sit
+       in are narrow enough to wrap. */
+    --fs-micro:   10px;
+    --fs-label:   11px;
+    --fs-meta:    12px;
+    --fs-body:    13px;
+    --fs-lg:      15px;
+    --fs-xl:      18px;
+    --fs-display: 20px;
+
     /* MOTION. Named for the job rather than the colour, so a call site
        reads as direction and not as decoration. */
     --tick-up:        var(--green);
@@ -138,9 +181,25 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     background: var(--bg); color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px;
+    font-family: var(--ff-body); font-size: var(--fs-body);
+    line-height: 1.45;
+    /* INHERITS. Every number in the app outside a form control now holds
+       its width as digits change -- prices, P/L, equity, grades, counts.
+       It used to be patched onto twelve individual selectors and was
+       missing from the largest numbers in the app. */
+    font-variant-numeric: tabular-nums;
     height: 100vh; display: flex; flex-direction: column; overflow: hidden;
   }
+
+  /* HEADINGS HAD NO GLOBAL RULE AT ALL, so every <h2> outside a .card fell
+     through to the browser default -- ~21px bold with no tracking. That is
+     what the four modal titles were rendering at, against #modalTitle's
+     15px, while nine bare <h3> landed at ~16.4px against .layerBox h3's
+     11px uppercase. Two elements, four and two treatments. */
+  h2 { font-family: var(--ff-chrome); font-size: var(--fs-lg);
+       font-weight: 600; letter-spacing: .2px; }
+  h3 { font-family: var(--ff-chrome); font-size: var(--fs-body);
+       font-weight: 600; }
 
   #topbar {
     display: flex; align-items: center; gap: 14px;
@@ -148,21 +207,24 @@
     border-bottom: 3px solid var(--scarlet);
   }
   #topLogo { height: 34px; width: auto; display: block; }
-  #topbar h1 { font-size: 17px; color: #ffffff; letter-spacing: 1px; }
+  #topbar h1 { font-family: var(--ff-chrome); font-size: var(--fs-xl);
+               font-weight: 600; color: #ffffff; letter-spacing: 1.5px; }
   .tab {
+    font-family: var(--ff-chrome); font-size: var(--fs-meta);
+    letter-spacing: .4px;
     padding: 6px 14px; cursor: pointer; border-radius: 4px;
     color: rgba(255,255,255,0.8); user-select: none;
   }
   .tab.active { background: var(--navy-3); color: #ffffff; }
   #status { margin-left: auto; display: flex; gap: 14px; align-items: center;
-            font-size: 12.5px; color: rgba(255,255,255,0.85); }
+            font-size: 12px; color: rgba(255,255,255,0.85); }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
          margin-right: 5px; background: var(--red); }
   .dot.on { background: #2fae6e; }
   #engineBtn {
     padding: 5px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35);
     background: var(--navy-3); color: #ffffff; cursor: pointer;
-    font-size: 12.5px;
+    font-size: 12px;
   }
   #engineBtn.armed { background: var(--scarlet); color: var(--navy);
                      border-color: var(--scarlet-bright); }
@@ -240,7 +302,7 @@
   .tipWrap .tip {
     visibility:hidden; opacity:0; position:absolute; bottom:135%; left:0;
     min-width:230px; max-width:320px; background:var(--navy); color:#fff;
-    padding:7px 10px; border-radius:6px; font-size:11.5px; line-height:1.45;
+    padding:7px 10px; border-radius:6px; font-size:11px; line-height:1.45;
     font-weight:400; text-transform:none; letter-spacing:0; z-index:960;
     box-shadow:0 6px 18px rgba(0,0,0,.25); transition:opacity .12s;
     pointer-events:none;
@@ -324,7 +386,7 @@
   .calDay.out { opacity:.35; }
   .calDay.sel { outline:3px solid var(--navy); outline-offset:1px; }
   .calDay.week { background:var(--card-2); }
-  .calDay .d  { font-size:11.5px; color:var(--text-dim); font-weight:600; }
+  .calDay .d  { font-size:11px; color:var(--text-dim); font-weight:600; }
   .calDay .pl { font-size:16px; font-weight:700; margin-top:auto; text-align:center; }
   .calDay .ct { font-size:11px; color:var(--text-dim); text-align:center; }
   /* Dividers that fence the graded Entry x Exit block off from "No exit" and
@@ -349,7 +411,8 @@
     text-transform:uppercase; letter-spacing:.6px;
   }
   .kpiStack b {
-    display:block; font-size:19px; color:var(--text); font-weight:700;
+    display:block; font-size:var(--fs-display); color:var(--text);
+    font-weight:700;
     letter-spacing:0; text-transform:none; margin-top:1px;
   }
   .layerBox {
@@ -357,12 +420,14 @@
     margin-bottom:8px; background: var(--card);
   }
   .layerBox h3 {
-    font-size:11px; text-transform:uppercase; letter-spacing:1px;
+    font-family: var(--ff-chrome);
+    font-size:var(--fs-label); text-transform:uppercase; letter-spacing:1px;
     color:var(--text-dim); margin-bottom:6px; font-weight:600;
   }
   .kpi { display:flex; gap:18px; flex-wrap:wrap; margin-bottom:10px; }
-  .kpi div { font-size:12.5px; color:var(--text-dim); }
-  .kpi b { display:block; font-size:19px; color:var(--text); font-weight:700; }
+  .kpi div { font-size:12px; color:var(--text-dim); }
+  .kpi b { display:block; font-size:var(--fs-display); color:var(--text);
+           font-weight:700; }
 
   #dash {
     flex: 1; display: grid; gap: 12px; padding: 12px;
@@ -377,7 +442,8 @@
     box-shadow: 0 1px 3px rgba(10,20,48,0.08);
   }
   .card h2 {
-    font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    font-family: var(--ff-chrome);
+    font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 1.5px;
     color: var(--text-dim); margin-bottom: 10px;
     border-bottom: 1px solid var(--border); padding-bottom: 7px;
   }
@@ -451,12 +517,12 @@
   #posActionBar {
     display: none; align-items: center; gap: 8px; margin: 4px 0 8px;
     padding: 7px 10px; background: var(--card-2);
-    border: 1px solid var(--border); border-radius: 6px; font-size: 12.5px;
+    border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
   }
   #posActionBar.show { display: flex; }
   #posActionBar .count { color: var(--navy); font-weight: 600; }
   #posActionBar .spacer { margin-left: auto; }
-  #posActionBar button { padding: 4px 12px; font-size: 12.5px; }
+  #posActionBar button { padding: 4px 12px; font-size: 12px; }
   #posActionBar button.danger { background: #fff; border-color: var(--red);
                                 color: var(--red); }
   #posActionBar button.danger:hover { background: var(--red); color: #fff; }
@@ -475,7 +541,12 @@
         font-size: 13px; }
   .kv .k { color: var(--text-dim); }
   .kv .v { text-align: right; font-variant-numeric: tabular-nums; }
-  .section-label { margin: 12px 0 5px; font-size: 11.5px; color: #5a7099;
+  /* The uppercase label idiom. It also exists as five hand-typed clones in
+     the markup at 11px and 10.5px in a different grey; those collapse onto
+     this class in a later pass. */
+  .section-label { margin: 12px 0 5px;
+                   font-family: var(--ff-chrome); font-size: var(--fs-label);
+                   color: #5a7099; font-weight: 600;
                    text-transform: uppercase; letter-spacing: 1px; }
 
   #chartCanvas { flex: 1 1 auto; min-height: 180px; width: 100%;
@@ -486,10 +557,19 @@
   #chartPrice { color: var(--text-dim); }
 
   .form-row { display: flex; gap: 8px; margin-bottom: 9px; align-items: center; }
-  input, select {
+  input, select, textarea {
     background: #fff; border: 1px solid var(--border); color: var(--text);
-    border-radius: 4px; padding: 6px 9px; font-size: 13px;
+    border-radius: 4px; padding: 6px 9px;
+    /* Form controls do not inherit font properties from body, which is why
+       the face, the size and the tabular figures are all restated here
+       rather than left to cascade. textarea was in no selector in this
+       file at all: three of the five rendered as raw browser textareas,
+       including the journal note field, which meant a prose input was
+       being typed into in Courier. */
+    font-family: var(--ff-body); font-size: var(--fs-body);
+    font-variant-numeric: tabular-nums;
   }
+  textarea { line-height: 1.45; resize: vertical; }
   input[type=text] { width: 90px; text-transform: uppercase; }
   input[type=number] { width: 80px; }
   button {
@@ -500,12 +580,14 @@
   button.buy { background: var(--scarlet); border-color: var(--scarlet-bright);
                color: var(--navy); font-weight: 600; }
   button.sell { background: #fff; }
-  #tradeMsg { font-size: 12.5px; color: var(--text-dim); min-height: 18px;
+  #tradeMsg { font-size: 12px; color: var(--text-dim); min-height: 18px;
               margin-top: 6px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; color: var(--text-dim); font-weight: 500;
-       font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
+  th { text-align: left; color: var(--text-dim); font-weight: 600;
+       font-family: var(--ff-chrome);
+       font-size: var(--fs-label); text-transform: uppercase;
+       letter-spacing: 0.5px;
        padding: 4px 8px; border-bottom: 1px solid var(--border); }
   td { padding: 6px 8px; border-bottom: 1px solid var(--rule);
        font-variant-numeric: tabular-nums; }
@@ -514,8 +596,30 @@
   tr.pos-row.selected { background: var(--card-2);
                         border-left: 3px solid var(--scarlet); }
 
+  /* ── READOUTS ──
+     The numbers he watches move, in the instrument face. Everything else
+     stays in the prose face; see the argument at --ff-num. letter-spacing
+     is zeroed because Consolas is already monospaced and any tracking on
+     top of that reads as a gap rather than as rhythm. */
+  .kpi b, .kpiStack b, #acctEquity, #chartPrice, .pl-pill, .calDay .pl,
+  .hmCell .val, .wBox, .prog-text, table.ordChain td, .num, td.num {
+    font-family: var(--ff-num);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+  /* Right-aligned numbers, so decimal points line up down a column. The
+     positions blotter emitted its price columns as plain <td> with the $
+     prefixed into the string, which left a trading app's money columns
+     left-aligned with ragged decimals -- while table.ordChain already
+     right-aligned correctly. This brings the app in line with itself. */
+  .num, td.num, th.num { text-align: right; }
+  /* The $ was concatenated into the cell string, so it was part of the
+     number and pushed the digits around. Dimmed and separated, it labels
+     the column instead of competing with it. */
+  .cur { color: var(--text-dim); margin-right: 1px; font-weight: 400; }
+
   .pl-pill { display: inline-block; min-width: 64px; text-align: center;
-             padding: 2px 8px; border-radius: 10px; font-size: 12.5px;
+             padding: 2px 8px; border-radius: 10px; font-size: 12px;
              border: 1px solid var(--border); background: #fff; }
   .pl-pill.up { background: var(--green); color: #fff; border-color: var(--green); }
   .pl-pill.down { background: var(--red); color: #fff; border-color: var(--red); }
@@ -548,7 +652,7 @@
   .tf-chip.on { background:var(--scarlet); color:var(--navy); font-weight:600; border-color:var(--scarlet); }
 
   .mode-pill { display: inline-block; min-width: 56px; text-align: center;
-               padding: 2px 8px; border-radius: 10px; font-size: 11.5px;
+               padding: 2px 8px; border-radius: 10px; font-size: 11px;
                cursor: pointer; user-select: none; font-weight: 600;
                letter-spacing: 0.5px; border: 1px solid var(--border);
                background: #fff; color: var(--text-dim); }
@@ -683,7 +787,7 @@
     margin-top:10px; background:var(--card);
   }
   .ordSecHead {
-    display:flex; align-items:center; gap:7px; font-size:12.5px;
+    display:flex; align-items:center; gap:7px; font-size:12px;
     font-weight:600;
   }
   .ordNote { font-size:10.5px; color:var(--text-dim); line-height:1.45; }
@@ -842,7 +946,7 @@
       </select>
     </div>
     <div class="form-row">
-      <label style="color:var(--text-dim);font-size:12.5px">Dollars
+      <label style="color:var(--text-dim);font-size:12px">Dollars
         (blank = allocation)</label>
       <input type="number" id="tDollars" placeholder="auto">
     </div>
@@ -893,9 +997,11 @@
       <thead><tr>
         <th style="width:26px"><input type="checkbox" id="posCheckAll"
             onclick="toggleCheckAll(this)" title="select all"></th>
-        <th>Ticker</th><th>Mode</th><th>Engine</th><th>Dir</th><th>Shares</th>
-        <th>Contracts</th><th>Set $</th><th>Current $</th>
-        <th>P/L $</th><th>P/L %</th><th></th>
+        <th>Ticker</th><th>Mode</th><th>Engine</th><th>Dir</th>
+        <th class="num">Shares</th>
+        <th class="num">Contracts</th><th class="num">Set $</th>
+        <th class="num">Current $</th>
+        <th class="num">P/L $</th><th class="num">P/L %</th><th></th>
       </tr></thead>
       <tbody id="posBody"></tbody>
     </table>
@@ -917,12 +1023,12 @@
       <button class="rangeBtn" onclick="scrClear()">Clear day</button>
     </div>
     <textarea id="scrPaste" rows="5" style="width:100%;font-family:monospace;
-      font-size:11.5px;margin-bottom:6px;"
+      font-size:11px;margin-bottom:6px;"
       placeholder="One per line. Ticker is enough; pivots and note optional:&#10;NBIS  230/228  232.85/236  Trade vs 1h MTF&#10;SNDK  1,870/1,857  1,886/1,900&#10;HOOD"></textarea>
     <div style="display:flex;gap:6px;margin-bottom:6px;">
       <button onclick="scrAddRows()" style="flex:1;">Add to watchlist</button>
     </div>
-    <div id="scrAddMsg" style="font-size:11.5px;color:var(--text-dim);margin-bottom:7px;"></div>
+    <div id="scrAddMsg" style="font-size:11px;color:var(--text-dim);margin-bottom:7px;"></div>
     <div id="scrList" style="flex:0 0 auto;max-height:230px;overflow:auto;"></div>
 
     <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:9px;
@@ -950,17 +1056,17 @@
       <h2 style="margin:0;border:0;padding:0;">Board</h2>
       <span id="scrFeed" title="live price feed"
             style="font-size:11px;color:var(--text-dim);">feed idle</span>
-      <label style="font-size:11.5px;color:var(--text-dim);">Alert at
+      <label style="font-size:11px;color:var(--text-dim);">Alert at
         <select id="scrAlertOn" onchange="scrSaveSettings()" style="margin-left:4px;">
           <option value="at_level">At level</option>
           <option value="triggered">Fresh cross only</option>
         </select></label>
-      <label style="font-size:11.5px;color:var(--text-dim);">
+      <label style="font-size:11px;color:var(--text-dim);">
         <input type="checkbox" id="scrEnabled" checked onchange="scrSaveSettings()">
         Auto-scan</label>
       <button onclick="scrWeightsOpen()">Weights</button>
       <button onclick="scrRun()">Scan now</button>
-      <span id="scrStatus" style="font-size:11.5px;color:var(--text-dim);margin-left:auto;"></span>
+      <span id="scrStatus" style="font-size:11px;color:var(--text-dim);margin-left:auto;"></span>
     </div>
     <div id="scrBoard" style="overflow:auto;"></div>
     <div style="border-top:1px solid var(--border);margin-top:10px;padding-top:9px;
@@ -988,13 +1094,13 @@
     </div>
     <div style="padding:14px 16px;overflow:auto;">
       <div style="display:flex;gap:9px;align-items:flex-end;flex-wrap:wrap;margin-bottom:13px;">
-        <label style="font-size:11.5px;color:var(--text-dim);">Ticker
+        <label style="font-size:11px;color:var(--text-dim);">Ticker
           <input type="text" id="plyTicker" style="width:92px;display:block;margin-top:3px;
             text-transform:uppercase;"></label>
-        <label style="font-size:11.5px;color:var(--text-dim);">Order
+        <label style="font-size:11px;color:var(--text-dim);">Order
           <input type="number" id="plyOrder" value="1" min="1" max="9"
             style="width:60px;display:block;margin-top:3px;"></label>
-        <label style="flex:1;min-width:170px;font-size:11.5px;color:var(--text-dim);">Name
+        <label style="flex:1;min-width:170px;font-size:11px;color:var(--text-dim);">Name
           <input type="text" id="plyLabel" placeholder="Long over 1h MTF"
             style="width:100%;display:block;margin-top:3px;"></label>
       </div>
@@ -1007,7 +1113,7 @@
         <div id="plySentence" style="font-size:13px;line-height:1.6;"></div>
       </div>
 
-      <label style="font-size:11.5px;color:var(--text-dim);">Note
+      <label style="font-size:11px;color:var(--text-dim);">Note
         <input type="text" id="plyNote" placeholder="the sheet wording, for your eyes"
           style="width:100%;margin-top:3px;"></label>
 
@@ -1034,7 +1140,7 @@
       <button onclick="scrWClose()">Done</button>
     </div>
     <div style="padding:13px 16px;overflow:auto;">
-      <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:11px;">
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:11px;">
         Whole numbers that total exactly 100 are kept. Anything else falls
         back to defaults. Zero switches a component off. Hover a name for
         what it measures.</div>
@@ -1043,7 +1149,7 @@
            border-top:2px solid var(--border);padding-top:10px;">
         <b style="flex:1;">Total</b>
         <b id="scrWTotal" class="wBox">100</b>
-        <span id="scrWHint" style="font-size:11.5px;width:150px;text-align:right;"></span>
+        <span id="scrWHint" style="font-size:11px;width:150px;text-align:right;"></span>
       </div>
       <div style="display:flex;gap:7px;margin-top:11px;">
         <button onclick="scrWSave()" style="flex:1;padding:8px;">Save</button>
@@ -1051,8 +1157,8 @@
       </div>
       <div id="scrWMsg" style="font-size:12px;margin-top:8px;color:var(--text-dim);"></div>
       <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
-        <b style="font-size:12.5px;">Calibrate from journal</b>
-        <div id="scrCal" style="font-size:11.5px;color:var(--text-dim);margin-top:5px;"></div>
+        <b style="font-size:12px;">Calibrate from journal</b>
+        <div id="scrCal" style="font-size:11px;color:var(--text-dim);margin-top:5px;"></div>
       </div>
     </div>
   </div>
@@ -1075,9 +1181,9 @@
         <option value="15Min">15 min</option>
         <option value="1Hour">1 hour</option>
       </select>
-      <label style="font-size:11.5px;color:var(--text-dim);">
+      <label style="font-size:11px;color:var(--text-dim);">
         <input type="checkbox" id="scrChartMtf" checked onchange="scrChartDraw()"> MTF</label>
-      <label style="font-size:11.5px;color:var(--text-dim);">
+      <label style="font-size:11px;color:var(--text-dim);">
         <input type="checkbox" id="scrChartLevels" checked onchange="scrChartDraw()"> Levels</label>
       <button onclick="scrChartClose()">Close</button>
     </div>
@@ -1096,9 +1202,9 @@
   <div class="card" style="flex:0 0 auto;">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <h2 style="margin:0;border:0;padding:0;">Accounting</h2>
-      <label style="font-size:11.5px;color:var(--text-dim);">From
+      <label style="font-size:11px;color:var(--text-dim);">From
         <input type="date" id="ldgStart" onchange="ldgLoad()" style="margin-left:4px;"></label>
-      <label style="font-size:11.5px;color:var(--text-dim);">To
+      <label style="font-size:11px;color:var(--text-dim);">To
         <input type="date" id="ldgEnd" onchange="ldgLoad()" style="margin-left:4px;"></label>
       <div style="display:flex;gap:5px;">
         <button class="rangeBtn" onclick="ldgRange('mtd')">MTD</button>
@@ -1152,7 +1258,7 @@
         <button onclick="$('ldgNewForm').style.display='none'">Cancel</button>
         <span id="ldgFMsg" style="font-size:12px;color:var(--text-dim);align-self:center;"></span>
       </div>
-      <div style="font-size:11.5px;color:var(--text-dim);margin-top:6px;">
+      <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">
         Enter expenses as a positive number; the sign is applied for you.</div>
     </div>
     <div style="overflow-x:auto;margin-top:9px;">
@@ -1165,7 +1271,7 @@
      gap:12px; overflow:auto;">
   <div class="card" style="flex:0 0 480px;">
     <h2>API Credentials</h2>
-    <div id="setupState" style="font-size:12.5px;color:var(--text-dim);margin-bottom:12px;"></div>
+    <div id="setupState" style="font-size:12px;color:var(--text-dim);margin-bottom:12px;"></div>
 
     <label style="font-size:12px;color:var(--text-dim);">API Key ID</label>
     <input type="text" id="cfgKey" placeholder="leave blank to keep current"
@@ -1185,7 +1291,7 @@
       </div>
       <div id="cfgLiveWarn" style="display:none;">
         <div style="background:#fdecea;border:1px solid var(--red);border-radius:6px;
-             padding:9px;font-size:12.5px;color:var(--red);margin-bottom:7px;">
+             padding:9px;font-size:12px;color:var(--red);margin-bottom:7px;">
           <b>Live account.</b> The bar loop can place orders on its own. Saving
           this disarms the engine and disconnects; you re-arm by hand afterwards.
           Type <b>LIVE</b> to confirm.
@@ -1197,20 +1303,20 @@
 
     <button onclick="cfgSave()" style="width:100%;padding:10px;margin-top:4px;">
       Save settings</button>
-    <div id="cfgMsg" style="margin-top:9px;font-size:12.5px;"></div>
+    <div id="cfgMsg" style="margin-top:9px;font-size:12px;"></div>
 
     <div style="border-top:1px solid var(--border);margin-top:14px;padding-top:11px;">
       <div style="display:flex;gap:6px;">
         <button onclick="cfgConnect()" style="flex:1;">Connect</button>
         <button onclick="cfgDisconnect()" style="flex:1;">Disconnect</button>
       </div>
-      <div id="cfgConnMsg" style="margin-top:8px;font-size:12.5px;color:var(--text-dim);"></div>
+      <div id="cfgConnMsg" style="margin-top:8px;font-size:12px;color:var(--text-dim);"></div>
     </div>
   </div>
 
   <div class="card" style="flex:1;">
     <h2>Journal Storage</h2>
-    <div id="setupJournal" style="font-size:12.5px;"></div>
+    <div id="setupJournal" style="font-size:12px;"></div>
   </div>
 </div>
 
@@ -1230,7 +1336,7 @@
     </div>
     <input type="text" id="jrnSearch" placeholder="search symbol, note or date"
            oninput="jrnSearchDebounced()" style="width:100%;margin-bottom:6px;">
-    <div id="jrnQueueMeta" style="font-size:12.5px;color:var(--text-dim);margin-bottom:8px;"></div>
+    <div id="jrnQueueMeta" style="font-size:12px;color:var(--text-dim);margin-bottom:8px;"></div>
     <div id="jrnQueue" style="flex:1; overflow:auto; min-height:0;"></div>
     <div style="border-top:1px solid var(--border); padding-top:10px; margin-top:10px;">
       <div style="display:flex;gap:6px;margin-bottom:8px;">
@@ -1243,10 +1349,10 @@
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:5px;">
           Pulls fills off the connected account. Ungraded on arrival.</div>
         <div style="display:flex;gap:6px;margin-bottom:6px;">
-          <label style="flex:1;font-size:11.5px;color:var(--text-dim);">From
+          <label style="flex:1;font-size:11px;color:var(--text-dim);">From
             <input type="date" id="jrnSyncStart" style="width:100%;margin-top:2px;">
           </label>
-          <label style="flex:1;font-size:11.5px;color:var(--text-dim);">To
+          <label style="flex:1;font-size:11px;color:var(--text-dim);">To
             <input type="date" id="jrnSyncEnd" placeholder="today"
                    style="width:100%;margin-top:2px;">
           </label>
@@ -1257,7 +1363,7 @@
           <button class="rangeBtn" onclick="jrnRange(30)">30d</button>
           <button class="rangeBtn" onclick="jrnRange('since')">Since last fill</button>
         </div>
-        <div id="jrnCutoff" style="font-size:11.5px;color:var(--text-dim);
+        <div id="jrnCutoff" style="font-size:11px;color:var(--text-dim);
              margin-bottom:6px;"></div>
         <div style="display:flex;gap:6px;">
           <button onclick="jrnSync(true)"  style="flex:1;">Preview</button>
@@ -1267,7 +1373,7 @@
 
       <div id="jrnPurgeBox" style="margin-top:9px;border-top:1px solid var(--border);
            padding-top:8px;">
-        <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:5px;">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:5px;">
           Synced history you had already graded elsewhere? Remove the ungraded
           copies. Graded fills are never touched.</div>
         <div style="display:flex;gap:6px;">
@@ -1280,7 +1386,7 @@
         <div style="font-size:12px;color:var(--text-dim);margin-bottom:5px;">
           Paste rows with a header line. Needs symbol, side, qty, price, time.</div>
         <textarea id="jrnPaste" rows="6" style="width:100%;margin-bottom:6px;
-          font-family:monospace;font-size:11.5px;"
+          font-family:monospace;font-size:11px;"
           placeholder="Symbol&#9;Side&#9;Qty&#9;Price&#9;Filled At"></textarea>
         <div style="display:flex;gap:6px;">
           <button onclick="jrnPasteGo(true)"  style="flex:1;">Preview</button>
@@ -1294,14 +1400,14 @@
           format is detected; grades and conditions come across either way.</div>
         <input type="file" id="jrnFileInput" accept=".csv,text/csv"
                onchange="jrnFilePicked()" style="width:100%;margin-bottom:6px;">
-        <div id="jrnFileName" style="font-size:11.5px;color:var(--text-dim);
+        <div id="jrnFileName" style="font-size:11px;color:var(--text-dim);
              margin-bottom:6px;"></div>
         <div style="display:flex; gap:6px;">
           <button onclick="jrnImport(true)"  style="flex:1;">Preview</button>
           <button onclick="jrnImport(false)" style="flex:1;">Import</button>
         </div>
         <details style="margin-top:7px;">
-          <summary style="font-size:11.5px;color:var(--text-dim);cursor:pointer;">
+          <summary style="font-size:11px;color:var(--text-dim);cursor:pointer;">
             Type a path instead</summary>
           <input type="text" id="jrnImportPath" placeholder="C:\path\to\export.csv"
                  style="width:100%;margin-top:5px;">
@@ -1331,11 +1437,11 @@
           text-align:center;"></h2>
       <button onclick="jrnCalStep(1)" title="next month">&#9654;</button>
       <button onclick="jrnCalStep(0)">This month</button>
-      <span id="jrnCalSum" style="font-size:12.5px;color:var(--text-dim);margin-left:6px;"></span>
+      <span id="jrnCalSum" style="font-size:12px;color:var(--text-dim);margin-left:6px;"></span>
       <button onclick="jrnCalShow(false)" style="margin-left:auto;">Back to grading</button>
     </div>
     <div id="jrnCalGrid"></div>
-    <div id="jrnCalDayHead" style="font-size:12.5px;color:var(--text-dim);margin:12px 0 6px;">
+    <div id="jrnCalDayHead" style="font-size:12px;color:var(--text-dim);margin:12px 0 6px;">
       Click a day to list its trades.</div>
     <table id="jrnCalDay"><thead></thead><tbody></tbody></table>
   </div>
@@ -1385,7 +1491,7 @@
   </div>
 
   <div class="card" style="flex:0 0 auto; display:flex; flex-direction:column;">
-    <div id="perfDetailHead" style="font-size:12.5px;color:var(--text-dim);
+    <div id="perfDetailHead" style="font-size:12px;color:var(--text-dim);
          margin-bottom:7px;">Click a cell to list its trades.</div>
     <div style="max-height:270px; overflow:auto;">
       <table id="perfDetail"><thead></thead><tbody></tbody></table>
@@ -1435,7 +1541,7 @@
       </select>
       <span id="condHead" style="font-size:12px;color:var(--text-dim);"></span>
     </div>
-    <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px;line-height:1.45;">
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;line-height:1.45;">
       Each condition or tag is compared with every other trade in view (Layers apply).
       Cloud conditions are read as <b>with</b> or <b>against</b> the trade, so a put below
       the cloud counts the same as a call above it. The edge is shrunk toward the book
@@ -1462,7 +1568,7 @@
       <button onclick="perfClearLayers()" style="margin-left:auto;">Clear all</button>
       <button onclick="perfCloseLayers()">Done</button>
     </div>
-    <div id="perfLayers" style="padding:13px 16px; overflow:auto; font-size:12.5px;"></div>
+    <div id="perfLayers" style="padding:13px 16px; overflow:auto; font-size:12px;"></div>
   </div>
 </div>
 
@@ -1479,7 +1585,7 @@
       <input type="text" id="logTicker" placeholder="filter ticker"
              onkeyup="if(event.key==='Enter')refreshLogs()">
       <button onclick="refreshLogs()">Refresh</button>
-      <span id="logCount" style="color:var(--text-dim);font-size:12.5px;"></span>
+      <span id="logCount" style="color:var(--text-dim);font-size:12px;"></span>
     </div>
     <div style="flex:1; overflow:auto; min-height:0;">
       <table id="logTable">
@@ -1521,7 +1627,7 @@
              style="flex:1; text-transform:none">
       <button class="buy" onclick="saveBasket()">Save Basket</button>
     </div>
-    <div id="bkMsg" style="font-size:12.5px;color:var(--text-dim);min-height:18px"></div>
+    <div id="bkMsg" style="font-size:12px;color:var(--text-dim);min-height:18px"></div>
   </div>
 
   <div class="card tool-card" id="card-bt">
@@ -1555,7 +1661,7 @@
              style="width:70px">
       <button class="buy" onclick="runBacktest()">RUN</button>
     </div>
-    <div id="btStatus" style="font-size:12.5px;color:var(--text-dim);
+    <div id="btStatus" style="font-size:12px;color:var(--text-dim);
          min-height:18px;margin-bottom:6px"></div>
     <div id="btResults" style="flex:1;overflow:auto;min-height:0"></div>
   </div>
@@ -1563,7 +1669,7 @@
   <div class="card tool-card" id="card-sc">
     <h2>Universe Screener<span class="chip" id="maxSc" title="maximize"
       onclick="toggleToolMax('card-sc','maxSc')">⛶</span></h2>
-    <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px">
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
       Runs an engine across a sector, basket, or list and logs per-name
       stats plus the pooled portfolio. Pick <b>OU pipeline</b> in the engine
       box to gate first: the half-life estimator measures each name's clock
@@ -1614,7 +1720,7 @@
         Sharpe-weight (2-pass)</label>
       <button class="buy" onclick="runScreen()">SCREEN</button>
     </div>
-    <div id="scStatus" style="font-size:12.5px;color:var(--text-dim);
+    <div id="scStatus" style="font-size:12px;color:var(--text-dim);
          min-height:18px;margin-bottom:6px"></div>
     <div id="scResults" style="flex:1;overflow:auto;min-height:0"></div>
   </div>
@@ -1622,7 +1728,7 @@
   <div class="card tool-card" id="card-as" style="grid-column:1 / -1">
     <h2>Engine Assignment<span class="chip" id="maxAs" title="maximize"
       onclick="toggleToolMax('card-as','maxAs')">⛶</span></h2>
-    <div style="font-size:11.5px;color:var(--text-dim);margin-bottom:8px">
+    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
       Fits one pooled theta line per name across 10m/30m/1h/2h/1D bars and
       snaps each 'ou' name onto the OU engine whose bar size puts its
       half-life nearest the centre of the shared 2–12 bar band. Arithmetic,
@@ -1647,7 +1753,7 @@
       <button onclick="runAssign(false)">DRY RUN</button>
       <button class="buy" onclick="runAssign(true)">APPLY</button>
     </div>
-    <div id="asStatus" style="font-size:12.5px;color:var(--text-dim);
+    <div id="asStatus" style="font-size:12px;color:var(--text-dim);
          min-height:18px;margin-bottom:6px"></div>
     <div id="asResults" style="flex:1;overflow:auto;min-height:0"></div>
   </div>
@@ -1665,7 +1771,7 @@
         <option value="long">long</option>
         <option value="short">short</option>
       </select>
-      <span id="ordAnchor" style="font-size:11.5px;color:var(--text-dim);"></span>
+      <span id="ordAnchor" style="font-size:11px;color:var(--text-dim);"></span>
       <div id="ordHeadStats"></div>
       <button id="ordClose" onclick="ordClose()" title="close">×</button>
     </div>
@@ -1680,7 +1786,7 @@
             <select id="ordExpiry" onchange="ordLoadChain()"
                     style="padding:3px 6px;border:1px solid var(--border);
                            border-radius:5px;background:var(--card);
-                           color:var(--text);font-size:11.5px;"></select>
+                           color:var(--text);font-size:11px;"></select>
           </span>
         </div>
         <div id="ordChainWrap">
@@ -1970,11 +2076,11 @@ async function refreshPositions() {
         `onclick="event.stopPropagation();onRowCheck('${r.ticker}',this.checked)"></td>` +
       `<td>${r.ticker}</td><td>${modeCell}</td><td>${engCell}</td>` +
       `<td>${r.direction}</td>` +
-      `<td>${r.shares}</td><td>${r.contracts}</td>` +
-      `<td>$${fmt(setD)}</td>` +
-      `<td>$${fmt(curD)}</td>` +
-      `<td><span class="pl-pill ${plClass}">${plText}</span></td>` +
-      `<td><span class="pl-pill ${plPctClass}">${plPctText}</span></td>` +
+      `<td class="num">${r.shares}</td><td class="num">${r.contracts}</td>` +
+      `<td class="num"><span class="cur">$</span>${fmt(setD)}</td>` +
+      `<td class="num"><span class="cur">$</span>${fmt(curD)}</td>` +
+      `<td class="num"><span class="pl-pill ${plClass}">${plText}</span></td>` +
+      `<td class="num"><span class="pl-pill ${plPctClass}">${plPctText}</span></td>` +
       `<td><span class="remove-btn" title="remove from list" ` +
         `onclick="event.stopPropagation();removeTicker('${r.ticker}')">✕</span></td>`;
     tb.appendChild(tr);
@@ -2692,7 +2798,7 @@ function jrnRenderQueue() {
        <div><b>${r.symbol}</b>
          <span style="color:${sideCol};font-weight:600;">${r.side.toUpperCase()}</span>
          <span style="color:var(--text-dim);">${r.qty} @ ${r.price}</span></div>
-       <div style="font-size:11.5px;color:var(--text-dim);">
+       <div style="font-size:11px;color:var(--text-dim);">
          ${(r.filled_at || '').replace('T', ' ')} &middot; ${r.source} &middot; ${gr}</div>
      </div>`;
   }).join('');
@@ -2746,7 +2852,7 @@ function jrnRenderEditor() {
   box.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:9px;margin-bottom:12px;">
       <div style="font-size:19px;font-weight:700;">${r.symbol}</div>
-      <div style="color:var(--text-dim);font-size:12.5px;">
+      <div style="color:var(--text-dim);font-size:12px;">
         ${r.source} &middot; $${(r.cash || 0).toFixed(2)}
         ${r.edited_at ? '&middot; edited ' + r.edited_at.replace('T',' ') : ''}</div>
       <button onclick="jrnDelete()" style="margin-left:auto;">Delete fill</button>
@@ -2770,7 +2876,7 @@ function jrnRenderEditor() {
           <input type="datetime-local" step="1" id="fld_filled_at"
                  value="${(r.filled_at || '').slice(0,19)}" style="width:100%;margin-top:2px;"></label>
       </div>
-      <div style="font-size:11.5px;color:var(--text-dim);margin-top:6px;">
+      <div style="font-size:11px;color:var(--text-dim);margin-top:6px;">
         Option symbols get the 100x multiplier automatically. Cash recomputes on save.</div>
     </div>
 
@@ -3165,7 +3271,7 @@ async function plyLoadList() {
     $('plyList').innerHTML = Object.keys(byT).sort().length
       ? Object.keys(byT).sort().map(t => `
         <div style="margin-bottom:8px;">
-          <div style="font-weight:700;font-size:12.5px;">${t}</div>
+          <div style="font-weight:700;font-size:12px;">${t}</div>
           ${byT[t].map(p => `
             <div style="padding:5px 7px;border-left:3px solid var(--navy-3);
               background:var(--card-2);border-radius:4px;margin-top:4px;
@@ -3359,7 +3465,7 @@ function plyRenderRows() {
         ? b.conditions.map((c,j)=>plyRow(c, 'b'+i+'c'+j, true)).join('')
         : '<div style="font-size:11px;color:var(--text-dim);margin-bottom:5px;">' +
           'None — this branch grades 2 whenever it is live.</div>'}
-      <button onclick="plyAddCond(${i})" style="font-size:11.5px;">+ condition</button>
+      <button onclick="plyAddCond(${i})" style="font-size:11px;">+ condition</button>
     </div>`).join('');
   plySentence();
 }
@@ -3582,7 +3688,7 @@ function scrPlayBlock(x) {
   return `<div style="margin-top:5px;padding:6px 8px;border-radius:5px;
        background:var(--card-2);border-left:3px solid ${
          bp.live ? (bp.bias==='long'?'var(--green)':'var(--red)') : 'var(--border)'};">
-      <div style="font-size:11.5px;font-weight:600;margin-bottom:3px;">
+      <div style="font-size:11px;font-weight:600;margin-bottom:3px;">
         ${(bp.active_index!=null && bp.branches
             ? (bp.branches[bp.active_index].label || bp.branches[bp.active_index].bias)
             : (bp.label || bp.bias))} ${bp.live
@@ -3647,7 +3753,7 @@ function scrRow(x, dim) {
          margin-top:2px;">${bits.join(' · ')}</div>`:''}
       ${scrPlayBlock(x)}
       ${x.best_play ? '' : bar}
-      ${x.note?`<div style="font-size:11.5px;color:var(--text-dim);
+      ${x.note?`<div style="font-size:11px;color:var(--text-dim);
          margin-top:4px;">${x.note}</div>`:''}
       ${!x.has_cloud?`<div style="font-size:11px;color:var(--red);margin-top:3px;">
          no cloud state: ${x.cloud_reason||'unknown'}</div>`:''}
@@ -3857,7 +3963,7 @@ function scrWRender() {
       <span style="width:11px;height:11px;border-radius:2px;flex:0 0 auto;
         background:${SCR_COMP_COLOR[k]};"></span>
       <span class="tipWrap" style="flex:1;">
-        <span style="font-size:12.5px;border-bottom:1px dotted var(--text-dim);
+        <span style="font-size:12px;border-bottom:1px dotted var(--text-dim);
           cursor:help;">${SCR_COMP_LABEL[k]}</span>
         <span class="tip">${SCR_COMP_HELP[k]}</span>
       </span>
@@ -4097,7 +4203,7 @@ function scrToast(a) {
       <span class="scrPill ${a.direction||''}">${a.direction||''}</span>
       <span style="font-weight:400;color:var(--text-dim);font-size:11px;">
         ${a.state.replace('_',' ')}</span></div>
-    <div style="font-size:11.5px;color:var(--text-dim);margin-top:2px;">
+    <div style="font-size:11px;color:var(--text-dim);margin-top:2px;">
       ${moneyFull(a.price)}${dist}</div>
     ${a.note?`<div style="font-size:11px;color:var(--text-dim);margin-top:3px;">
       ${a.note}</div>`:''}`;
@@ -4284,7 +4390,7 @@ function ldgSummary(r) {
         <div style="display:flex;justify-content:space-between;padding:8px 0 2px;
              font-size:16px;"><b>Net</b>
           <b style="color:${ldgCol(r.net)}">${ldgMoney(r.net)}</b></div>
-        ${r.transfers ? `<div style="font-size:11.5px;color:var(--text-dim);margin-top:5px;">
+        ${r.transfers ? `<div style="font-size:11px;color:var(--text-dim);margin-top:5px;">
           Transfers in/out ${ldgMoney(r.transfers)} — your own money moving,
           excluded from net.</div>` : ''}
       </div>
@@ -4514,7 +4620,7 @@ async function cfgJournalPanel() {
           : `<span style="color:var(--red)">Pairing does not reconcile
              (off by $${rec.difference}). Treat the heatmap as unreliable.</span>`}
       </div>
-      <div style="font-size:11.5px;color:var(--text-dim);word-break:break-all;">
+      <div style="font-size:11px;color:var(--text-dim);word-break:break-all;">
         Journal file: ${st.file}<br>Data dir: ${(CFG.loaded||{}).data_dir || ''}
       </div>`;
   } catch (e) { $('setupJournal').textContent = 'Failed: ' + e; }
@@ -5319,7 +5425,7 @@ function perfCellClick(e, x, el) {
       if ((c === 'entry_at' || c === 'exit_at') && v) v = String(v).replace('T', ' ');
       return `<td>${v == null ? '—' : v}</td>`;
     }).join('') +
-    `<td style="max-width:320px;font-size:11.5px;color:var(--text-dim);">${l.entry_note || ''}</td></tr>`
+    `<td style="max-width:320px;font-size:11px;color:var(--text-dim);">${l.entry_note || ''}</td></tr>`
   ).join('');
 }
 
@@ -5683,9 +5789,9 @@ async function pollBacktest() {
     skipped + thin +
     (j.trades_csv
       ? `<div class="section-label">Trades CSV</div>
-         <div style="font-size:11.5px;word-break:break-all">${j.trades_csv}</div>`
+         <div style="font-size:11px;word-break:break-all">${j.trades_csv}</div>`
       : '') +
-    `<div style="margin-top:10px;font-size:11.5px;color:var(--text-dim)">
+    `<div style="margin-top:10px;font-size:11px;color:var(--text-dim)">
        If breakeven slippage is below the spread you actually pay, this
        sleeve does not exist — fast engines die here, not in the statistics.
        Underlying-only simulation. Live longs add a call sleeve, live shorts
@@ -5760,7 +5866,7 @@ async function bulkDelete() {
   }
 
   const body =
-    `<div style="font-size:12.5px;color:var(--text-dim);margin-bottom:10px">` +
+    `<div style="font-size:12px;color:var(--text-dim);margin-bottom:10px">` +
     `${tickers.length} selected — ${held.length} holding a position, ` +
     `${flat.length} flat.</div>` +
     `<label class="del-opt"><input type="radio" name="delMode" value="immediate" checked>` +
@@ -6425,7 +6531,7 @@ function renderScreenPortfolio(j) {
         `<tr><th>Ticker</th><th>Fit Sharpe</th><th>Fit trades</th>` +
         `<th>Weight</th><th>Budget</th></tr></thead>` +
         `<tbody>${wrows}</tbody></table></div>` +
-        `<div style="margin:4px 0 8px;font-size:11.5px;color:var(--text-dim)">
+        `<div style="margin:4px 0 8px;font-size:11px;color:var(--text-dim)">
           The honest comparison is the two eval blocks above: same window,
           same names available, only the weights differ. Fitting weights on
           the full window and grading them on the same window is selection —
@@ -6653,7 +6759,7 @@ function renderAssign(j) {
     `<div style="font-size:12px">${chg}</div>` +
     (skp ? `<div class="section-label">Skipped (not on watchlist)</div>` +
            `<div style="font-size:12px">${skp}</div>` : '') +
-    `<div style="margin-top:8px;font-size:11.5px;color:var(--text-dim)">
+    `<div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
        Assignment is arithmetic on the measured half-life; it never ranks
        engines by P/L. Scale is the name's measured session length vs the
        960-min extended model (~2.46 = trades regular hours only). '—' =
