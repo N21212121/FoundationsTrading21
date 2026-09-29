@@ -12,7 +12,12 @@
     --navy: #2b3a52;        /* dark readable blue (text/structure) */
     --navy-2: #7B92B2;      /* 646C — topbar / brand */
     --navy-3: #6a82a4;      /* deeper blue — active/hover fills */
-    --scarlet: #F9E04C; --scarlet-bright: #F9E04C;  /* 106C yellow (fills) */
+    --scarlet: #F9E04C;
+    /* Was an exact duplicate of --scarlet until 2026-09-29, which made its
+       four uses visual no-ops. Now --scarlet mixed 35% toward white: same
+       hue, and navy text on the lighter stop GAINS contrast, so the
+       gradient it enables is strictly safe. */
+    --scarlet-bright: #FBEB8B;                      /* 106C yellow (fills) */
     --text: #2b3a52;        /* dark blue text */
     --text-dim: #6a7689;
     --green: #1e7e4d; --red: #c0392b; --border: #c9cfdc;
@@ -27,6 +32,108 @@
        card's background, and a red edge on a green card would argue with
        itself. 4.39:1 at worst, against the 3:1 UI-component threshold. */
     --trigger-edge: #B4530A;
+
+    /* ═══ ELEVATION, GLOSS AND MOTION ═══════════════════════════════════
+       Added 2026-09-29 (design/08). Nothing above this line changes except
+       --scarlet-bright, which was a duplicate of --scarlet and is argued
+       in design/08 3.5. No hue is introduced anywhere below.
+
+       THE RULE THESE SERVE: depth encodes affordance. A surface that
+       REPORTS is carved in (inset). A surface that ACCEPTS INPUT is lifted
+       out (outer shadow) and inverts when pressed. Nothing gets a shadow
+       for decoration -- a shadow says whether a thing can be pressed. */
+
+    /* SHADOW BASE. Every shadow and every scrim in the app is this one
+       colour at different alphas: --navy #2b3a52 split into channels so
+       rgba() can consume it (0x2b=43, 0x3a=58, 0x52=82). It replaces five
+       unrelated near-blacks that were doing this job at nine different
+       alphas across eighteen sites. NOTHING IS BLACK AFTER THIS -- a black
+       shadow under a navy UI reads as dirt; a navy one reads as the same
+       light falling on the same material. */
+    --shadow-rgb: 43,58,82;
+
+    /* ELEVATION. Each step is a TIGHT CONTACT shadow (small, no spread --
+       "this rests on the plane below") stacked with a BROAD AMBIENT one
+       carrying NEGATIVE spread, so the ambient stays under the object
+       instead of haloing it. Alpha roughly doubles per step, blur roughly
+       triples. Reach matters: --elev-1 stays inside .card's 14px padding,
+       --elev-2 does not, which is why nested panels stop at 1. */
+    --elev-1: 0 1px 1px rgba(var(--shadow-rgb),.05),
+              0 2px 6px -1px rgba(var(--shadow-rgb),.08);
+    --elev-2: 0 1px 2px rgba(var(--shadow-rgb),.07),
+              0 4px 10px -2px rgba(var(--shadow-rgb),.10),
+              0 10px 20px -8px rgba(var(--shadow-rgb),.07);
+    --elev-3: 0 2px 4px rgba(var(--shadow-rgb),.09),
+              0 10px 24px -6px rgba(var(--shadow-rgb),.15);
+    --elev-4: 0 4px 8px rgba(var(--shadow-rgb),.10),
+              0 20px 40px -8px rgba(var(--shadow-rgb),.22),
+              0 44px 84px -28px rgba(var(--shadow-rgb),.18);
+
+    /* GLOSS. One inset white hairline on the TOP EDGE ONLY. No text ever
+       sits on a 1px line, so gloss cannot move a contrast ratio. Two
+       strengths because white-on-white is invisible: -hi for --card,
+       -hi-2 for --card-2 and other tinted chrome. */
+    --gloss-hi:   inset 0 1px 0 rgba(255,255,255,.60);
+    --gloss-hi-2: inset 0 1px 0 rgba(255,255,255,.92);
+
+    /* SHEEN. A vertical gradient applied as background-IMAGE over a
+       background-COLOR, so one token glosses navy, yellow and grey chrome
+       alike. It runs 0% -> 5.5% navy, so it DARKENS ONLY: every pixel of a
+       sheened surface ends up equal to or darker than before, and dark text
+       on it can only gain contrast.
+       FORBIDDEN on .scrCard / .scrPill / .eng-pill.ov, whose fills carry
+       DIRECTION as signal, and on bare td/th, because .hmGapV/.hmGapH fake
+       the heatmap dividers with a background-image and this would erase
+       them. Always applied through an explicit class list. */
+    --sheen: linear-gradient(180deg,
+               rgba(var(--shadow-rgb),0)    0%,
+               rgba(var(--shadow-rgb),.055) 100%);
+
+    /* RECESSED. The contact shadow turned inward: readouts, fields, wells,
+       and the pressed state of anything raised. */
+    --inset-1: inset 0 1px 2px rgba(var(--shadow-rgb),.10);
+    --inset-2: inset 0 2px 5px rgba(var(--shadow-rgb),.14);
+
+    /* BORDERS. All three are --border #c9cfdc moved along the single axis
+       between --bg #f2f3f6 and --navy #2b3a52. Light falls from above, so a
+       RAISED surface takes --border-lift on its top edge and a RECESSED one
+       takes --border-firm there. --rule is for table row lines and replaces
+       the orphan literal #e3e7ef. */
+    --rule:        #e0e3ea;  /* --border mixed 55% -> --bg */
+    --border-lift: #dbdfe8;  /* --border mixed 45% -> --bg */
+    --border-firm: #adb4c3;  /* --border mixed 18% -> --navy */
+
+    /* SURFACES. --sunk is a well: progress-bar tracks, sticky headers.
+       --topbar-lo is the bottom stop of the topbar gradient, --navy-2
+       mixed 12% -> --navy. White on it measures 3.67:1 against 3.18:1 on
+       --navy-2 today, and the gradient only darkens downward, so every
+       pixel of that bar is equal or better than it is now. */
+    --sunk:      #e3e6ed;
+    --topbar-lo: #7187a6;
+
+    /* SCRIMS, replacing four different base colours. The alphas are raised
+       because --navy is lighter than the near-blacks it replaces; at these
+       values every backdrop is marginally darker than before, never
+       lighter. */
+    --scrim:        rgba(var(--shadow-rgb),.44);
+    --scrim-strong: rgba(var(--shadow-rgb),.55);
+
+    /* MOTION. Named for the job rather than the colour, so a call site
+       reads as direction and not as decoration. */
+    --tick-up:        var(--green);
+    --tick-down:      var(--red);
+    --tick-up-wash:   rgba(30,126,77,.16);
+    --tick-down-wash: rgba(192,57,43,.16);
+
+    /* Z-INDEX LADDER, written down because it was not, and because the
+       order panel was wrong. Ascending: topbar 3 < maximized-card backdrop
+       150 < maximized card 200 < ORDER PANEL 300 < confirm modal 500 <
+       perf/chart/watch/play modals 900-946 < toasts 950 < tooltips 960.
+       The order panel sits above a maximized card (it used to be BELOW
+       both the card and its backdrop, so pressing `order` on a screener
+       card while the chart was maximized opened the panel behind a dark
+       sheet) and below the confirm modal, so a confirmation raised FROM
+       the panel still lands on top of it. */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -181,12 +288,13 @@
   }
   .gradeBtn:hover { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
   .gradeBtn.sel { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
-  .chip {
-    display:inline-block; padding:3px 9px; margin:2px 3px 2px 0;
-    border:1px solid var(--border); border-radius:12px; cursor:pointer;
-    font-size:12px; background:var(--card-2); user-select:none;
-  }
-  .chip.on  { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
+  /* .chip lived here AND at the .tf-chip block below, disagreeing on
+     background, colour, font-size, padding and radius. The lower rule won
+     every shared property, so this one was dead code -- except that it set
+     all four margins while the other overrode only margin-left, so the
+     computed value was an asymmetric 2px 3px 2px 6px that nobody wrote.
+     Consolidated into the single rule below; only .chip.bad.on stays here,
+     beside the other heatmap chrome it belongs with. */
   .chip.bad.on { background: var(--red); border-color: var(--red); color:#fff; }
   .hmTable { border-collapse: separate; border-spacing: 3px; }
   .hmTable th {
@@ -282,7 +390,7 @@
   }
   #chartBackdrop {
     display: none; position: fixed; inset: 0; z-index: 150;
-    background: rgba(10,20,48,0.35);
+    background: var(--scrim);
   }
   #chartBackdrop.show { display: block; }
   #card-trade { grid-area: trade; }
@@ -293,7 +401,7 @@
   }
   #posBackdrop {
     display: none; position: fixed; inset: 0; z-index: 150;
-    background: rgba(10,20,48,0.35);
+    background: var(--scrim);
   }
   #posBackdrop.show { display: block; }
 
@@ -316,7 +424,7 @@
   .tool-card h2 .chip { margin-left: auto; }
   #toolBackdrop {
     display: none; position: fixed; inset: 0; z-index: 150;
-    background: rgba(10,20,48,0.35);
+    background: var(--scrim);
   }
   #toolBackdrop.show { display: block; }
 
@@ -399,7 +507,7 @@
   th { text-align: left; color: var(--text-dim); font-weight: 500;
        font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px;
        padding: 4px 8px; border-bottom: 1px solid var(--border); }
-  td { padding: 6px 8px; border-bottom: 1px solid #e3e7ef;
+  td { padding: 6px 8px; border-bottom: 1px solid var(--rule);
        font-variant-numeric: tabular-nums; }
   tr.pos-row { cursor: pointer; }
   tr.pos-row:hover { background: var(--card-2); }
@@ -417,10 +525,19 @@
                 line-height: 1; }
   .remove-btn:hover { background: var(--red); color: #fff; }
 
-  .chip { display:inline-block; font-size:11px; padding:2px 9px; margin-left:6px;
+  /* THE one .chip rule. Values are the ones that were already computing,
+     so nothing moves on screen -- including the asymmetric margin, kept
+     deliberately rather than tidied, because the 6px left gap separates a
+     chip from the heading text it follows and the 3px right gap separates
+     chips from each other. It gets revisited when .chip splits into a
+     toggle and an .icon-btn, which are two jobs currently sharing one
+     class. .chip.on was #e8ecf4, an off-white appearing nowhere else in
+     the file, while its four sibling .on states all used #fff. */
+  .chip { display:inline-block; font-size:11px; padding:2px 9px;
+          margin:2px 3px 2px 6px;
           border:1px solid var(--border); border-radius:11px; cursor:pointer;
           color:var(--text-dim); background:#fff; user-select:none; }
-  .chip.on { background:var(--navy-3); color:#e8ecf4; border-color:var(--navy-3); }
+  .chip.on { background:var(--navy-3); color:#fff; border-color:var(--navy-3); }
 
   .tf-chip { display:inline-block; font-size:11px; padding:3px 10px; cursor:pointer;
              border:1px solid var(--border); border-left:none; color:var(--text-dim);
@@ -461,9 +578,15 @@
      The ladder blocks open closed and unchecked. §6.1 measured the scale-out
      raising the win rate while losing money, so a panel that opened with it
      armed would be arguing against its own evidence. */
+  /* z-index was 60 -- BELOW a maximized card (200) and below even its
+     backdrop (150) -- so pressing `order` on a screener card while the
+     chart or the positions table was maximized opened the panel behind a
+     dark sheet. 300 puts it above both and still below the confirm modal
+     (500), so a confirmation raised from the panel lands on top of it.
+     See the ladder written down in :root. */
   #ordBack {
-    position:fixed; inset:0; background:rgba(11,31,59,.5);
-    display:none; align-items:center; justify-content:center; z-index:60;
+    position:fixed; inset:0; background:var(--scrim-strong);
+    display:none; align-items:center; justify-content:center; z-index:300;
   }
   #ordBack.show { display:flex; }
   #ordBox {
@@ -612,7 +735,7 @@
   /* ── Standardized modal: ALL confirmations route through this ── */
   #modalBack {
     display: none; position: fixed; inset: 0;
-    background: rgba(10,20,48,0.45); z-index: 500;
+    background: var(--scrim-strong); z-index: 500;
     align-items: center; justify-content: center;
   }
   #modalBack.show { display: flex; }
@@ -636,10 +759,15 @@
   #modalConfirm { background: var(--scarlet); color: var(--navy); font-weight: 600;
                   border-color: var(--scarlet-bright); }
   .jobctl-row { display:flex; gap:6px; margin-top:6px; }
+  /* --panel and --accent were never defined anywhere in this file, so
+     these buttons rendered with NO background at all and the hover rule was
+     discarded by the parser. Repointed at the tokens that were meant:
+     --card-2 is what every other secondary control fills with, and
+     --scarlet is the hover border the base `button` rule already uses. */
   .jobctl { font-size:11px; padding:3px 10px; border-radius:5px;
-    border:1px solid var(--border); background:var(--panel);
+    border:1px solid var(--border); background:var(--card-2);
     color:var(--text); cursor:pointer; }
-  .jobctl:hover { border-color:var(--accent); }
+  .jobctl:hover { border-color:var(--scarlet); }
   .jobctl.stopbtn { border-color:var(--red); color:var(--red); }
   .jobctl.buy { border-color:var(--green); color:var(--green); }
 </style>
@@ -847,7 +975,7 @@
 
 <!-- play builder modal -->
 <div id="plyModal" style="display:none; position:fixed; inset:0;
-     background:rgba(15,28,43,.5); z-index:946; align-items:center;
+     background:var(--scrim-strong); z-index:946; align-items:center;
      justify-content:center;" onclick="plyBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(720px,95vw); max-height:90vh;
@@ -894,7 +1022,7 @@
 
 <!-- weights modal -->
 <div id="scrWModal" style="display:none; position:fixed; inset:0;
-     background:rgba(15,28,43,.45); z-index:945; align-items:center;
+     background:var(--scrim); z-index:945; align-items:center;
      justify-content:center;" onclick="scrWBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(560px,94vw); max-height:88vh;
@@ -932,7 +1060,7 @@
 
 <!-- chart modal -->
 <div id="scrChartModal" style="display:none; position:fixed; inset:0;
-     background:rgba(15,28,43,.5); z-index:940; align-items:center;
+     background:var(--scrim-strong); z-index:940; align-items:center;
      justify-content:center;" onclick="scrChartBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(1200px,95vw); max-height:92vh;
@@ -1322,7 +1450,7 @@
 
 <!-- layers modal -->
 <div id="perfLayerModal" style="display:none; position:fixed; inset:0;
-     background:rgba(15,28,43,.45); z-index:900; align-items:center;
+     background:var(--scrim); z-index:900; align-items:center;
      justify-content:center;" onclick="perfLayerBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(940px,92vw); max-height:86vh;
