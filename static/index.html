@@ -179,6 +179,30 @@
        the panel still lands on top of it. */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* KEYBOARD FOCUS. --royal exists precisely because it is the accessible
+     foreground counterpart to the yellow -- 5.35:1 at worst against every
+     background in use -- so it is the right token and costs nothing new. */
+  :focus-visible {
+    outline: 2px solid var(--royal); outline-offset: 2px; border-radius: 3px;
+  }
+  /* Inside the topbar the page background is navy, where royal is too close
+     to read; white is the only thing with contrast there. */
+  #topbar :focus-visible { outline-color: #fff; }
+
+  /* SCROLLBARS. 31 scroll containers in this app were showing the default
+     Windows scrollbar -- wide, square-cornered, drawn from a system palette
+     that shares nothing with the theme -- inside rounded, shadowed cards.
+     Eight lines. */
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border); border-radius: 999px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+  ::-webkit-scrollbar-corner { background: transparent; }
   body {
     background: var(--bg); color: var(--text);
     font-family: var(--ff-body); font-size: var(--fs-body);
@@ -229,6 +253,9 @@
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
          margin-right: 5px; background: var(--red); }
   .dot.on { background: #2fae6e; }
+  /* Red used to be the DEFAULT here, so the topbar claimed a disconnection
+     it had not yet checked. Grey is "not known yet"; .off is the claim. */
+  .dot.off { background: var(--red); }
   #engineBtn {
     padding: 5px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35);
     background-color: var(--navy-3); color: #ffffff; cursor: pointer;
@@ -564,9 +591,13 @@
   #posActionBar .count { color: var(--navy); font-weight: 600; }
   #posActionBar .spacer { margin-left: auto; }
   #posActionBar button { padding: 4px 12px; font-size: 12px; }
-  #posActionBar button.danger { background: #fff; border-color: var(--red);
-                                color: var(--red); }
-  #posActionBar button.danger:hover { background: var(--red); color: #fff; }
+  /* Unscoped from #posActionBar, where it was defined and therefore only
+     worked because its one use happened to live there. */
+  button.danger { background-color: #fff; background-image: none;
+                  border-color: var(--red); color: var(--red);
+                  font-weight: 600; }
+  button.danger:hover { background-color: var(--red); color: #fff;
+                        border-color: var(--red); }
   .row-check, #posCheckAll { cursor: pointer; width: 15px; height: 15px; }
 
   /* radio group inside the delete modal */
@@ -616,6 +647,15 @@
     font-variant-numeric: tabular-nums;
   }
   textarea { line-height: 1.45; resize: vertical; }
+  select {
+    appearance: none; -webkit-appearance: none;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%236a7689' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+  }
+  select:hover { border-color: var(--border-firm); }
+
   input[type=text] { width: 90px; text-transform: uppercase; }
   input[type=number] { width: 80px; }
   /* A control is LIFTED OUT: outer shadow, lit top edge, and it sinks when
@@ -1007,7 +1047,7 @@
   <div class="tab" id="tabLedger" onclick="showTab('ledger')">Ledger</div>
   <div class="tab" id="tabSetup" onclick="showTab('setup')">Setup</div>
   <div id="status">
-    <span><span class="dot" id="connDot"></span><span id="connText">…</span></span>
+    <span><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
     <span id="acctEquity"></span>
     <button id="engineBtn" onclick="toggleEngine()">ENGINE: OBSERVE</button>
   </div>
@@ -2115,7 +2155,7 @@ async function refreshHealth() {
   try {
     const h = await api('/api/health');
     _connected = !!h.connected;
-    $('connDot').className = 'dot' + (h.connected ? ' on' : '');
+    $('connDot').className = 'dot' + (h.connected ? ' on' : ' off');
     $('connText').textContent = h.connected
       ? (h.paper ? 'paper' : 'LIVE') : 'disconnected';
     engineOn = h.engine_enabled;
@@ -2128,6 +2168,7 @@ async function refreshHealth() {
         '$' + a.equity.toLocaleString(undefined, {maximumFractionDigits: 0});
     }
   } catch (e) { _connected = false;
+                $('connDot').className = 'dot off';
                 $('connText').textContent = 'backend down'; }
 }
 
@@ -2666,8 +2707,10 @@ function toggleMaximize(){
   chartState.maximized=!chartState.maximized;
   card.classList.toggle('maxed', chartState.maximized);
   back.classList.toggle('show', chartState.maximized);
-  $('chartMax').textContent = chartState.maximized ? '✕' : '⛶';
+  $('chartMax').textContent = '⛶';   /* was '✕' when maximized: an X on a
+                                        restore control reads as "close" */
   $('chartMax').title = chartState.maximized ? 'restore' : 'maximize';
+  $('chartMax').classList.toggle('on', chartState.maximized);
   // Canvas must re-measure after the box resizes, then redraw.
   requestAnimationFrame(()=>{ renderChart(); });
 }
@@ -5923,8 +5966,9 @@ function togglePosMax() {
   const on = !card.classList.contains('maxed');
   card.classList.toggle('maxed', on);
   back.classList.toggle('show', on);
-  $('posMax').textContent = on ? '✕' : '⛶';
+  $('posMax').textContent = '⛶';     /* see the note in toggleMaximize */
   $('posMax').title = on ? 'restore' : 'maximize';
+  $('posMax').classList.toggle('on', on);
 }
 
 function onRowCheck(ticker, isChecked) {
