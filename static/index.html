@@ -201,10 +201,18 @@
   h3 { font-family: var(--ff-chrome); font-size: var(--fs-body);
        font-weight: 600; }
 
+  /* Was a flat rectangle. The gradient darkens DOWNWARD only, so white on
+     it goes from 3.18:1 at the top to 3.67:1 at the bottom -- every pixel
+     equal or better than before. position/z-index are required or the new
+     shadow paints underneath the view below it. */
   #topbar {
     display: flex; align-items: center; gap: 14px;
-    padding: 8px 18px; background: var(--navy-2);
+    padding: 8px 18px;
+    background: linear-gradient(180deg, var(--navy-2), var(--topbar-lo));
     border-bottom: 3px solid var(--scarlet);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.22),
+                0 2px 6px -1px rgba(var(--shadow-rgb),.14);
+    position: relative; z-index: 3;
   }
   #topLogo { height: 34px; width: auto; display: block; }
   #topbar h1 { font-family: var(--ff-chrome); font-size: var(--fs-xl);
@@ -223,10 +231,11 @@
   .dot.on { background: #2fae6e; }
   #engineBtn {
     padding: 5px 12px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35);
-    background: var(--navy-3); color: #ffffff; cursor: pointer;
-    font-size: 12px;
+    background-color: var(--navy-3); color: #ffffff; cursor: pointer;
+    font-size: var(--fs-meta);
   }
-  #engineBtn.armed { background: var(--scarlet); color: var(--navy);
+  #engineBtn.armed { background-color: var(--scarlet); color: var(--navy);
+                     box-shadow: var(--inset-2);
                      border-color: var(--scarlet-bright); }
 
   /* ── journal + heatmap ── */
@@ -237,12 +246,19 @@
   }
   .srcTab {
     flex:1; padding:5px 0; font-size:12px; border:1px solid var(--border);
-    border-radius:5px; background:var(--card-2); color:var(--text); cursor:pointer;
+    border-radius:5px; background-color:var(--card-2); color:var(--text);
+    cursor:pointer;
   }
-  .srcTab.on { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
+  .srcTab.on { background: var(--navy-3); color:#fff; border-color:var(--navy-3);
+               box-shadow: var(--inset-2); }
   .scrCard {
     border:1px solid var(--border); border-left-width:4px; border-radius:7px;
+    border-top-color:var(--border-lift);
     padding:9px 11px; margin-bottom:8px; background:var(--card);
+    /* Shadow and border only -- deliberately NO sheen. The background tint
+       here carries direction and its intensity carries state, per the
+       comment below, and a gradient would muddy a hand-tuned signal. */
+    box-shadow:var(--elev-1);
   }
   /* The urgency ladder, coolest and quietest to warmest and loudest:
      grey -> navy -> burnt orange. It runs on its own axis from the
@@ -282,10 +298,18 @@
      wick through it. The reorder is the real signal.
      It marks with a rail and a ring rather than a fill, so it never argues
      with the direction tint underneath it. */
-  .scrCard { transition: background-color .5s ease, box-shadow .5s ease; }
+  .scrCard { transition: background-color .5s ease, box-shadow .5s ease,
+                        border-color .5s ease; }
+  .scrCard:hover { box-shadow: var(--elev-2); }
+  /* A crossing is a thing that HAPPENED, so it comes forward. The hard
+     2px ring on its own read as a sticker stuck to a flat card; with a
+     shadow behind it, it reads as an object that moved toward you. The
+     transition above already covers box-shadow, so this animates for
+     free. */
   .scrCard.scrCrossed {
     box-shadow: inset 3px 0 0 0 var(--royal),
-                0 0 0 2px rgba(52,87,197,.28);
+                0 0 0 2px rgba(52,87,197,.28),
+                var(--elev-2);
   }
   /* Live price ticks colour briefly, then settle. */
   [data-live] { transition: color .8s ease; font-variant-numeric: tabular-nums; }
@@ -304,7 +328,7 @@
     min-width:230px; max-width:320px; background:var(--navy); color:#fff;
     padding:7px 10px; border-radius:6px; font-size:11px; line-height:1.45;
     font-weight:400; text-transform:none; letter-spacing:0; z-index:960;
-    box-shadow:0 6px 18px rgba(0,0,0,.25); transition:opacity .12s;
+    box-shadow:var(--elev-3); transition:opacity .12s;
     pointer-events:none;
   }
   .tipWrap .tip::after {
@@ -334,22 +358,24 @@
   .scrToast {
     background:var(--card); border:1px solid var(--border);
     border-left:4px solid var(--scarlet); border-radius:7px; padding:10px 12px;
-    box-shadow:0 6px 20px rgba(0,0,0,.18); cursor:pointer;
+    box-shadow:var(--elev-3); cursor:pointer;
   }
   .rangeBtn {
     flex:1; padding:3px 0; font-size:11px; border:1px solid var(--border);
-    border-radius:4px; background:var(--card-2); color:var(--text-dim);
+    border-radius:4px; background-color:var(--card-2); color:var(--text-dim);
     cursor:pointer;
   }
-  .rangeBtn:hover { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
+  .rangeBtn:hover { background: var(--navy-3); color:#fff;
+                    border-color:var(--navy-3); }
   .gradeRow { display:flex; gap:6px; }
   .gradeBtn {
     flex:1; padding:10px 0; border:1px solid var(--border); border-radius:6px;
-    background: var(--card-2); color: var(--text); cursor:pointer;
-    font-size:15px; font-weight:600;
+    background-color: var(--card-2); color: var(--text); cursor:pointer;
+    font-size:var(--fs-lg); font-weight:600;
   }
   .gradeBtn:hover { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
-  .gradeBtn.sel { background: var(--navy-3); color:#fff; border-color:var(--navy-3); }
+  .gradeBtn.sel { background: var(--navy-3); color:#fff;
+                  border-color:var(--navy-3); box-shadow: var(--inset-2); }
   /* .chip lived here AND at the .tf-chip block below, disagreeing on
      background, colour, font-size, padding and radius. The lower rule won
      every shared property, so this one was dead code -- except that it set
@@ -373,13 +399,15 @@
   .hmCell.sparse { border-style: dashed; opacity:.72; }
   .hmCell .n   { font-size:11px; color: rgba(0,0,0,.55); }
   .hmCell .val { font-size:15px; font-weight:700; }
+  .hmCell:hover { position:relative; z-index:1; box-shadow:var(--elev-2); }
   .hmCell.sel { outline:3px solid var(--navy); outline-offset:1px; }
   /* journal P/L calendar: weekdays plus a week-total column */
   .calGrid { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)) minmax(0,.8fr);
     gap:6px; }
   .calHead { font-size:11px; text-transform:uppercase; letter-spacing:1px;
     color:var(--text-dim); font-weight:600; text-align:center; padding-bottom:2px; }
-  .calDay { border:1px solid var(--border); border-radius:10px; min-height:78px;
+  .calDay { border:1px solid var(--border); border-top-color:var(--border-lift);
+    border-radius:10px; min-height:78px; box-shadow:var(--elev-1);
     padding:6px 8px; display:flex; flex-direction:column; background:var(--card); }
   .calDay.has { cursor:pointer; }
   .calDay.has:hover { border-color:var(--navy); }
@@ -436,10 +464,16 @@
     grid-template-areas: "details chart" "trade positions";
     min-height: 0;
   }
+  /* ~25 instances, and the one surface in the app that already had a
+     shadow: a single 3px blur at 8% of a near-black. Layered now, and lit
+     along its top edge, because light falls from above. --elev-1 and not
+     -2: this card is overflow:auto, so anything bigger would be sheared by
+     its own clipping box. */
   .card {
     background: var(--card); border: 1px solid var(--border);
+    border-top-color: var(--border-lift);
     border-radius: 8px; padding: 14px; overflow: auto; min-height: 0;
-    box-shadow: 0 1px 3px rgba(10,20,48,0.08);
+    box-shadow: var(--gloss-hi), var(--elev-1);
   }
   .card h2 {
     font-family: var(--ff-chrome);
@@ -451,7 +485,7 @@
   #card-chart { grid-area: chart; display: flex; flex-direction: column; }
   #card-chart.maxed {
     position: fixed; top: 5vh; left: 5vw; width: 90vw; height: 90vh;
-    z-index: 200; box-shadow: 0 12px 48px rgba(10,20,48,0.35);
+    z-index: 200; box-shadow: var(--elev-4);
     margin: 0;
   }
   #chartBackdrop {
@@ -463,7 +497,7 @@
   #card-positions { grid-area: positions; }
   #card-positions.maxed {
     position: fixed; top: 4vh; left: 4vw; width: 92vw; height: 92vh;
-    z-index: 200; box-shadow: 0 12px 48px rgba(10,20,48,0.35); margin: 0;
+    z-index: 200; box-shadow: var(--elev-4); margin: 0;
   }
   #posBackdrop {
     display: none; position: fixed; inset: 0; z-index: 150;
@@ -484,7 +518,7 @@
                min-width: 0; min-height: 0; }
   .tool-card.maxed {
     position: fixed; top: 4vh; left: 4vw; width: 92vw; height: 92vh;
-    z-index: 200; box-shadow: 0 12px 48px rgba(10,20,48,0.35); margin: 0;
+    z-index: 200; box-shadow: var(--elev-4); margin: 0;
   }
   .tool-card h2 { display: flex; align-items: center; }
   .tool-card h2 .chip { margin-left: auto; }
@@ -500,7 +534,8 @@
                font-variant-numeric: tabular-nums; }
   .prog-text b { color: var(--navy); font-weight: 600; }
   .prog-bar { height: 3px; margin-top: 4px; border-radius: 2px;
-              background: var(--card-2); overflow: hidden; }
+              background: var(--sunk); overflow: hidden;
+              box-shadow: var(--inset-1); }
   .prog-bar > i { display: block; height: 100%; width: 0;
                   background: var(--navy-3); transition: width .35s ease; }
   .prog-bar.done > i { background: var(--green); }
@@ -514,10 +549,16 @@
 
 
   /* bulk action bar: only visible when rows are checked */
+  /* Only on screen while rows are checked, so it should read as having
+     ARRIVED rather than as having always been there. --elev-3 is the
+     transient tier. */
   #posActionBar {
     display: none; align-items: center; gap: 8px; margin: 4px 0 8px;
-    padding: 7px 10px; background: var(--card-2);
-    border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
+    padding: 7px 10px;
+    background-color: var(--card-2); background-image: var(--sheen);
+    border: 1px solid var(--border); border-top-color: var(--border-lift);
+    border-radius: 6px; font-size: var(--fs-meta);
+    box-shadow: var(--gloss-hi-2), var(--elev-3);
   }
   #posActionBar.show { display: flex; }
   #posActionBar .count { color: var(--navy); font-weight: 600; }
@@ -557,8 +598,13 @@
   #chartPrice { color: var(--text-dim); }
 
   .form-row { display: flex; gap: 8px; margin-bottom: 9px; align-items: center; }
+  /* A field REPORTS and receives: it is carved in. The top border is the
+     DARKEST of the three -- a recess is shadowed on top, which is the exact
+     inverse of the lit top edge a raised control gets. */
   input, select, textarea {
-    background: #fff; border: 1px solid var(--border); color: var(--text);
+    background: #fff; border: 1px solid var(--border);
+    border-top-color: var(--border-firm); color: var(--text);
+    box-shadow: var(--inset-1);
     border-radius: 4px; padding: 6px 9px;
     /* Form controls do not inherit font properties from body, which is why
        the face, the size and the tabular figures are all restated here
@@ -572,14 +618,56 @@
   textarea { line-height: 1.45; resize: vertical; }
   input[type=text] { width: 90px; text-transform: uppercase; }
   input[type=number] { width: 80px; }
+  /* A control is LIFTED OUT: outer shadow, lit top edge, and it sinks when
+     pressed. There was no :active rule anywhere in this file, so nothing in
+     the app acknowledged being clicked. The yellow hover border was the
+     only hover cue a generic button had; it stays, and gains the lift. */
   button {
-    background: var(--card-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+    background-color: var(--card-2); background-image: var(--sheen);
+    border: 1px solid var(--border); border-top-color: var(--border-lift);
+    color: var(--text);
+    border-radius: 4px; padding: 6px 14px; cursor: pointer;
+    font-size: var(--fs-body);
+    box-shadow: var(--gloss-hi-2), var(--elev-1);
+    transition: box-shadow .12s ease, border-color .12s ease,
+                transform .06s ease;
   }
-  button:hover { border-color: var(--scarlet); }
-  button.buy { background: var(--scarlet); border-color: var(--scarlet-bright);
-               color: var(--navy); font-weight: 600; }
-  button.sell { background: #fff; }
+  button:hover { border-color: var(--scarlet);
+                 box-shadow: var(--gloss-hi-2), var(--elev-2); }
+  button:active { box-shadow: var(--inset-2); transform: translateY(1px);
+                  border-top-color: var(--border-firm); }
+
+  /* PRIMARY ACTIONS. --scarlet-bright is no longer a duplicate of
+     --scarlet, so these finally get the gradient the token was named for.
+     The border was grey on a yellow button, which was most of why they
+     looked unfinished. */
+  button.buy, #modalConfirm, .ordSend {
+    background-color: var(--scarlet);
+    background-image: linear-gradient(180deg, var(--scarlet-bright),
+                                              var(--scarlet));
+    border: 1px solid #e6cd42;
+    color: var(--navy); font-weight: 600;
+    box-shadow: var(--gloss-hi-2), var(--elev-1);
+  }
+  button.buy:hover, #modalConfirm:hover, .ordSend:hover {
+    border-color: #d9be36;
+    box-shadow: var(--gloss-hi-2), var(--elev-2);
+  }
+  button.buy:active, #modalConfirm:active, .ordSend:active {
+    box-shadow: var(--inset-2); transform: translateY(1px);
+  }
+
+  /* SELL was `background:#fff` and nothing else, so the destructive-side
+     action in a trading app read as less important than "Bulk Add" sitting
+     next to it. Given the outline-destructive treatment that .danger
+     already used, which is the strongest thing available that is not a
+     fill -- a filled red SELL would compete with the P/L pills. */
+  button.sell {
+    background-color: #fff; background-image: none;
+    border-color: var(--red); color: var(--red); font-weight: 600;
+  }
+  button.sell:hover { background-color: var(--red); color: #fff;
+                      border-color: var(--red); }
   #tradeMsg { font-size: 12px; color: var(--text-dim); min-height: 18px;
               margin-top: 6px; }
 
@@ -592,9 +680,17 @@
   td { padding: 6px 8px; border-bottom: 1px solid var(--rule);
        font-variant-numeric: tabular-nums; }
   tr.pos-row { cursor: pointer; }
-  tr.pos-row:hover { background: var(--card-2); }
-  tr.pos-row.selected { background: var(--card-2);
-                        border-left: 3px solid var(--scarlet); }
+  tr.pos-row:hover td { background: var(--card-2);
+                        box-shadow: inset 0 1px 0 #fff,
+                                    inset 0 -1px 0 var(--rule); }
+  tr.pos-row.selected td { background: var(--card-2); }
+  /* Was border-left on the <tr>, which in the collapsed border model only
+     renders against the first cell and fights that cell's padding. An
+     inset shadow on td:first-child is the same pattern table.ordChain
+     already uses for its selected row. */
+  tr.pos-row.selected td:first-child {
+    box-shadow: inset 3px 0 0 0 var(--scarlet);
+  }
 
   /* ── READOUTS ──
      The numbers he watches move, in the instrument face. Everything else
@@ -641,7 +737,8 @@
           margin:2px 3px 2px 6px;
           border:1px solid var(--border); border-radius:11px; cursor:pointer;
           color:var(--text-dim); background:#fff; user-select:none; }
-  .chip.on { background:var(--navy-3); color:#fff; border-color:var(--navy-3); }
+  .chip.on { background:var(--navy-3); color:#fff; border-color:var(--navy-3);
+             box-shadow:var(--inset-1); }
 
   .tf-chip { display:inline-block; font-size:11px; padding:3px 10px; cursor:pointer;
              border:1px solid var(--border); border-left:none; color:var(--text-dim);
@@ -649,7 +746,8 @@
   .tf-chip:first-child { border-left:1px solid var(--border);
                          border-radius:5px 0 0 5px; }
   .tf-chip:last-child { border-radius:0 5px 5px 0; }
-  .tf-chip.on { background:var(--scarlet); color:var(--navy); font-weight:600; border-color:var(--scarlet); }
+  .tf-chip.on { background:var(--scarlet); color:var(--navy); font-weight:600;
+                border-color:var(--scarlet); box-shadow:var(--inset-1); }
 
   .mode-pill { display: inline-block; min-width: 56px; text-align: center;
                padding: 2px 8px; border-radius: 10px; font-size: 11px;
@@ -696,7 +794,7 @@
   #ordBox {
     background:var(--bg); border:1px solid var(--border); border-radius:10px;
     width:86vw; height:84vh; display:flex; flex-direction:column;
-    padding:0; box-shadow:0 18px 60px rgba(11,31,59,.34); overflow:hidden;
+    padding:0; box-shadow:var(--gloss-hi), var(--elev-4); overflow:hidden;
   }
   #ordHead {
     display:flex; align-items:center; gap:10px; flex-wrap:wrap;
@@ -710,8 +808,9 @@
   }
   #ordHeadStats b { color:var(--text); font-size:15px; }
   #ordClose {
-    border:1px solid var(--border); background:var(--card-2); cursor:pointer;
-    border-radius:5px; font-size:15px; line-height:1; padding:4px 9px;
+    border:1px solid var(--border); background-color:var(--card-2);
+    cursor:pointer;
+    border-radius:5px; font-size:var(--fs-lg); line-height:1; padding:4px 9px;
     color:var(--text-dim);
   }
   #ordCols {
@@ -736,7 +835,9 @@
   }
   table.ordChain { width:100%; border-collapse:collapse; font-size:12px; }
   table.ordChain th {
-    position:sticky; top:0; background:var(--card-2); z-index:1;
+    position:sticky; top:0; z-index:1;
+    background-color:var(--sunk); background-image:var(--sheen);
+    box-shadow:0 2px 5px -2px rgba(var(--shadow-rgb),.28);
     font-size:10px; text-transform:uppercase; letter-spacing:.5px;
     color:var(--text-dim); padding:5px 7px; text-align:right;
     border-bottom:1px solid var(--border); font-weight:700;
@@ -800,8 +901,10 @@
     background:var(--bg); color:var(--text); font-size:12px; width:100%;
   }
   .ordX {
-    border:1px solid var(--border); background:var(--bg); border-radius:5px;
-    cursor:pointer; color:var(--text-dim); font-size:13px; padding:4px 0;
+    border:1px solid var(--border); background-color:var(--bg);
+    border-radius:5px;
+    cursor:pointer; color:var(--text-dim); font-size:var(--fs-body);
+    padding:4px 0;
   }
   .ordPv {
     margin-top:10px; border-top:1px solid var(--border); padding-top:9px;
@@ -819,21 +922,29 @@
     border-left:3px solid var(--red); padding:4px 0 4px 8px; margin-top:6px;
     font-size:11px; color:var(--red);
   }
+  /* Fill, border and gloss come from the primary-action rule near the base
+     `button` block. This declaration is later in the file at the same
+     specificity, so anything it restates would win the tie and silently
+     defeat that rule -- it owns geometry only. */
   .ordSend {
     width:100%; margin-top:10px; padding:9px; border-radius:6px;
-    border:1px solid var(--border); background:var(--scarlet);
-    color:var(--navy); font-weight:700; font-size:13px; cursor:pointer;
+    color:var(--navy); font-weight:700; font-size:var(--fs-body);
+    cursor:pointer;
   }
   .ordSend[disabled] {
-    background:var(--card-2); color:var(--text-dim); cursor:not-allowed;
+    background-color:var(--card-2); background-image:none;
+    border-color:var(--border); box-shadow:none;
+    color:var(--text-dim); cursor:not-allowed;
   }
   .ordBtn {
-    border:1px solid var(--border); background:var(--card); border-radius:5px;
-    font-size:10.5px; font-weight:700; text-transform:uppercase;
+    border:1px solid var(--border); background-color:var(--card);
+    border-radius:5px;
+    font-size:var(--fs-micro); font-weight:700; text-transform:uppercase;
     letter-spacing:.5px; color:var(--text-dim); cursor:pointer;
     padding:2px 7px; margin-left:4px;
   }
-  .ordBtn:hover { color:var(--text); border-color:var(--navy); }
+  .ordBtn:hover { color:var(--text); border-color:var(--navy);
+                  box-shadow:var(--gloss-hi-2), var(--elev-2); }
 
 
   /* ── Standardized modal: ALL confirmations route through this ── */
@@ -845,7 +956,8 @@
   #modalBack.show { display: flex; }
   #modalBox {
     background: var(--card); border-radius: 10px; min-width: 380px;
-    max-width: 480px; box-shadow: 0 8px 32px rgba(10,20,48,0.3);
+    max-width: 480px; border: 1px solid var(--border-lift);
+    box-shadow: var(--gloss-hi), var(--elev-4);
     border-top: 3px solid var(--scarlet); overflow: hidden;
   }
   #modalTitle {
@@ -858,10 +970,12 @@
   }
   #modalBtns {
     display: flex; justify-content: flex-end; gap: 8px;
-    padding: 12px 18px; background: var(--card-2);
+    padding: 12px 18px;
+    background-color: var(--card-2); background-image: var(--sheen);
+    box-shadow: inset 0 1px 0 var(--rule);
   }
-  #modalConfirm { background: var(--scarlet); color: var(--navy); font-weight: 600;
-                  border-color: var(--scarlet-bright); }
+  /* Geometry and weight only -- see the note on .ordSend. */
+  #modalConfirm { color: var(--navy); font-weight: 600; }
   .jobctl-row { display:flex; gap:6px; margin-top:6px; }
   /* --panel and --accent were never defined anywhere in this file, so
      these buttons rendered with NO background at all and the hover rule was
@@ -1085,6 +1199,7 @@
      justify-content:center;" onclick="plyBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(720px,95vw); max-height:90vh;
+       box-shadow:var(--elev-4);
        display:flex; flex-direction:column;">
     <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;
          border-bottom:1px solid var(--border);">
@@ -1132,6 +1247,7 @@
      justify-content:center;" onclick="scrWBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(560px,94vw); max-height:88vh;
+       box-shadow:var(--elev-4);
        display:flex; flex-direction:column;">
     <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;
          border-bottom:1px solid var(--border);">
@@ -1170,7 +1286,7 @@
      justify-content:center;" onclick="scrChartBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(1200px,95vw); max-height:92vh;
-       display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.3);">
+       display:flex; flex-direction:column; box-shadow:var(--elev-4);">
     <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;
          border-bottom:1px solid var(--border);flex-wrap:wrap;">
       <h2 id="scrChartTitle" style="margin:0;border:0;padding:0;">—</h2>
@@ -1560,7 +1676,7 @@
      justify-content:center;" onclick="perfLayerBackdrop(event)">
   <div style="background:var(--card); border:1px solid var(--border);
        border-radius:9px; width:min(940px,92vw); max-height:86vh;
-       display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.28);">
+       display:flex; flex-direction:column; box-shadow:var(--elev-4);">
     <div style="display:flex;align-items:center;gap:10px;padding:13px 16px;
          border-bottom:1px solid var(--border);">
       <h2 style="margin:0;border:0;padding:0;">Layers</h2>
