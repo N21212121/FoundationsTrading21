@@ -1028,6 +1028,55 @@
   .jobctl:hover { border-color:var(--scarlet); }
   .jobctl.stopbtn { border-color:var(--red); color:var(--red); }
   .jobctl.buy { border-color:var(--green); color:var(--green); }
+
+  /* ═══════════════ MOTION ═══════════════
+     Built on what was already here rather than beside it: the .scrCard
+     transition, the [data-live] colour transition and the one @keyframes in
+     the file (progSlide) are all reused below.
+
+     Everything animates transform, opacity and colour, which the compositor
+     handles. background-color is reserved for the few slow aggregates: it
+     paints on the main thread, and with a live tape there can be ~50 price
+     ticks a second, which is the one thing here that could actually cost
+     frames. */
+
+  /* transform does not apply to inline elements, and every tick target is
+     an inline <span>, so the translateY half of a tick would silently do
+     nothing without this. The negative margin cancels the padding so
+     nothing shifts its neighbours. */
+  .tickable, [data-live], #acctEquity, #chartPrice, .badge {
+    display: inline-block; border-radius: 3px;
+  }
+  .tickable, [data-live], #acctEquity, #chartPrice {
+    padding: 0 3px; margin: 0 -3px;
+  }
+  /* Was .8s. On a 1-second feed that means a fast mover's colour is
+     permanently mid-transition and never returns to rest. */
+  [data-live] { transition: color .45s ease; }
+
+  /* A number mid-count-up reads as moving rather than as simply wrong. */
+  .mo-tweening { opacity: .93; }
+
+  /* A refresh is not a blank flash. The container keeps its content and
+     goes quiet, and a hairline slides across its top edge -- reusing
+     progSlide rather than writing a second sliding bar. */
+  .mo-stale { opacity: .58; filter: saturate(.55);
+              transition: opacity .22s ease, filter .22s ease; }
+  .mo-busy { position: relative; }
+  .mo-busy::after {
+    content: ''; position: absolute; top: 0; left: 0; height: 2px; width: 35%;
+    background: var(--navy-3); border-radius: 2px; pointer-events: none;
+    animation: progSlide 1.1s ease-in-out infinite;
+  }
+  /* A feed that has gone quiet should look quiet, not broken. */
+  #scrFeed.mo-pulse { animation: moBreathe 2.4s ease-in-out infinite; }
+  @keyframes moBreathe { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mo-busy::after, #scrFeed.mo-pulse { animation: none; }
+    [data-live] { transition: none; }
+    .card, button, .scrCard { transition: none; }
+  }
 </style>
 </head>
 <body>
@@ -2116,6 +2165,189 @@
 
 <script>
 const $ = id => document.getElementById(id);
+
+/* ═══════════════ MOTION ═══════════════
+   One helper behind every live number, so animation lives in one place
+   instead of at a dozen call sites. A call site that did
+       node.textContent = s
+   becomes
+       setLiveValue(node, s, {key: 'scr:AAPL:px', num: px});
+   and that is the whole integration. */
+const MO = (() => {
+  const reduced = !!(window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const hidden = () => document.visibilityState === 'hidden';
+
+  /* LAST COMMITTED VALUE, KEYED BY A STABLE STRING -- not by the node.
+     This is the most important line in the file. scrRender replaces
+     #scrBoard.innerHTML wholesale, so after a reorder all ~50 screener
+     cards are brand-new nodes. A WeakMap keyed on the element would see
+     "first render" for every one of them and flash all fifty rows at once.
+     Keyed by 'scr:AAPL:px', history survives the rebuild and only
+     genuinely-changed numbers move. Bounded by (watchlist x fields). */
+  const seen = new Map();
+  const anim = new WeakMap();
+  const raf = new WeakMap();
+
+  function tick(node, dir, wash) {
+    if (reduced || hidden() || !dir || !node) return;
+    const prior = anim.get(node);
+    if (prior) prior.cancel();          /* never composite two ticks */
+    const col = dir > 0 ? 'var(--tick-up)' : 'var(--tick-down)';
+    const bg = dir > 0 ? 'var(--tick-up-wash)' : 'var(--tick-down-wash)';
+    const dy = dir > 0 ? -4 : 4;        /* up ticks rise into place */
+    const kf = wash
+      ? [{color: col, backgroundColor: bg, transform: 'translateY(' + dy + 'px)'},
+         {color: col, backgroundColor: bg, transform: 'translateY(0)', offset: .3},
+         {color: col, backgroundColor: 'rgba(0,0,0,0)', offset: .75},
+         {color: 'inherit', backgroundColor: 'rgba(0,0,0,0)', transform: 'translateY(0)'}]
+      : [{color: col, transform: 'translateY(' + dy + 'px)'},
+         {color: col, transform: 'translateY(0)', offset: .32},
+         {color: 'inherit', transform: 'translateY(0)'}];
+    const a = node.animate(kf, {duration: 420, fill: 'none',
+                                easing: 'cubic-bezier(.2,.75,.25,1)'});
+    anim.set(node, a);
+    a.finished.then(() => { if (anim.get(node) === a) anim.delete(node); },
+                    () => {});          /* cancel() rejects; swallow it */
+  }
+
+  function countUp(node, from, to, fmt, ms) {
+    const prior = raf.get(node);
+    if (prior) cancelAnimationFrame(prior);
+    /* A hidden tab throttles rAF to nearly nothing, so a tween started
+       there would freeze mid-number and display a figure that was never
+       true. Commit the real value instead. */
+    if (reduced || hidden() || from == null ||
+        !isFinite(from) || !isFinite(to)) {
+      node.textContent = fmt(to); node.classList.remove('mo-tweening'); return;
+    }
+    const t0 = performance.now();
+    node.classList.add('mo-tweening');
+    const step = now => {
+      const t = Math.min(1, (now - t0) / ms);
+      const e = 1 - Math.pow(1 - t, 3);            /* easeOutCubic */
+      node.textContent = fmt(from + (to - from) * e);
+      if (t < 1) { raf.set(node, requestAnimationFrame(step)); }
+      else { raf.delete(node); node.textContent = fmt(to);
+             node.classList.remove('mo-tweening'); }
+    };
+    raf.set(node, requestAnimationFrame(step));
+  }
+
+  /* opts.key      stable identity, REQUIRED for any node that gets
+                   recreated by an innerHTML rebuild
+      opts.num     the numeric value, which enables direction and tweening
+      opts.fmt     n => string, for count-up frames
+      opts.tween   ms of count-up; 0 (default) commits instantly
+      opts.wash    true adds a background tint -- slow aggregates only
+      opts.flash   false records history without animating
+      opts.colorize true leaves the directional colour in place afterwards
+      returns      -1 / 0 / +1 */
+  function setLiveValue(node, next, opts) {
+    if (!node) return 0;
+    const o = opts || {};
+    const key = o.key != null ? o.key : node;
+    const had = seen.has(key);
+    const prev = seen.get(key);
+    const isNum = typeof o.num === 'number' && isFinite(o.num);
+    const cur = isNum ? o.num : String(next);
+    const fmt = o.fmt || (n => String(n));
+    const text = next != null ? next : fmt(cur);
+
+    /* A FIRST PAINT IS NOT A CHANGE. Nothing animates without history for
+       this key, which is also what stops a 50-card rebuild flashing every
+       row. The old code did this one guard by hand and documented why:
+       prev is null on the first tick and `px > null` coerces to `px > 0`,
+       so an unguarded compare flashes every row green on arrival. */
+    if (!had) { seen.set(key, cur); node.textContent = text; return 0; }
+    if (cur === prev) return 0;                  /* unchanged: touch nothing */
+    seen.set(key, cur);
+
+    const dir = (isNum && typeof prev === 'number')
+      ? (cur > prev ? 1 : (cur < prev ? -1 : 0)) : 0;
+
+    if (o.tween > 0 && isNum && typeof prev === 'number') {
+      countUp(node, prev, cur, fmt, o.tween);
+    } else {
+      node.textContent = text;
+    }
+    if (o.flash !== false) tick(node, dir, !!o.wash);
+    if (o.colorize) {
+      node.style.color = dir > 0 ? 'var(--tick-up)'
+                       : (dir < 0 ? 'var(--tick-down)' : 'var(--text)');
+    }
+    return dir;
+  }
+
+  /* FLIP, for the screener reorder. The point: FLIP needs the old
+     GEOMETRY, not the old NODES -- so this works unchanged against
+     scrRender's wholesale innerHTML replacement. The replacement card is
+     visually identical to the one it replaced, so animating the NEW node
+     from the OLD node's position reads exactly as the old row sliding.
+     scrRow is not touched. */
+  function flipCapture(container, sel, attr) {
+    const m = new Map();
+    if (!container) return {m: m, scroll: 0};
+    container.querySelectorAll(sel).forEach(el => {
+      m.set(el.getAttribute(attr), el.getBoundingClientRect());
+    });
+    /* `innerHTML =` resets scrollTop to 0, so scrolling the board and
+       waiting for a reorder yanked the view back to the top. Restoring it
+       here fixes a live papercut that has nothing to do with motion. */
+    return {m: m, scroll: container.scrollTop};
+  }
+
+  function flipPlay(container, sel, attr, snap, ms) {
+    if (!container || !snap) return;
+    container.scrollTop = snap.scroll;
+    if (reduced || hidden()) return;
+    const moves = [];
+    /* READ pass first: every getBoundingClientRect together, so the whole
+       batch costs one forced layout instead of one per card. */
+    container.querySelectorAll(sel).forEach(el => {
+      const was = snap.m.get(el.getAttribute(attr));
+      const now = el.getBoundingClientRect();
+      if (!was) { moves.push([el, null, null]); return; }   /* entering */
+      const dx = was.left - now.left, dy = was.top - now.top;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;     /* didn't move */
+      moves.push([el, dx, dy]);
+    });
+    /* WRITE pass: no reads in here, so nothing thrashes. */
+    for (const mv of moves) {
+      const el = mv[0], dx = mv[1], dy = mv[2];
+      if (dx == null) {
+        el.animate([{opacity: 0, transform: 'translateY(-7px)'},
+                    {opacity: 1, transform: 'none'}],
+                   {duration: 240, easing: 'ease-out'});
+      } else {
+        el.animate([{transform: 'translate(' + dx + 'px,' + dy + 'px)'},
+                    {transform: 'none'}],
+                   {duration: ms || 320,
+                    easing: 'cubic-bezier(.2,.8,.2,1)'});
+      }
+    }
+  }
+
+  function busy(el, on) {
+    if (!el) return;
+    el.classList.toggle('mo-busy', !!on);
+    el.classList.toggle('mo-stale', !!on);
+  }
+  function stale(el, on) { if (el) el.classList.toggle('mo-stale', !!on); }
+
+  /* Drop history for a prefix, so a watchlist change cannot leave a stale
+     baseline that flashes a wrong direction on the next render. */
+  function forget(prefix) {
+    for (const k of Array.from(seen.keys())) {
+      if (typeof k === 'string' && k.indexOf(prefix) === 0) seen.delete(k);
+    }
+  }
+
+  return {setLiveValue: setLiveValue, flipCapture: flipCapture,
+          flipPlay: flipPlay, busy: busy, stale: stale, forget: forget,
+          reduced: reduced, hidden: hidden};
+})();
+const setLiveValue = MO.setLiveValue;
 let selected = null;
 let engineOn = false;
 let lastRows = [];
@@ -2164,8 +2396,9 @@ async function refreshHealth() {
     b.className = engineOn ? 'armed' : '';
     if (h.connected) {
       const a = await api('/api/account');
-      if (a.equity) $('acctEquity').textContent =
-        '$' + a.equity.toLocaleString(undefined, {maximumFractionDigits: 0});
+      if (a.equity) setLiveValue($('acctEquity'), null, {
+        key: 'acct:equity', num: a.equity, tween: 600, wash: true,
+        fmt: n => '$' + Math.round(n).toLocaleString()});
     }
   } catch (e) { _connected = false;
                 $('connDot').className = 'dot off';
@@ -2690,7 +2923,8 @@ function startPriceTicker(){
       const r=await fetch(`/api/quote/${t}`).then(x=>x.json()).catch(()=>null);
       if(r&&typeof r.mid==='number'){
         const el=$('chartPrice'); const prev=chartState.lastPrice;
-        el.textContent=' $'+r.mid.toFixed(2);
+        setLiveValue(el,' $'+r.mid.toFixed(2),
+                     {key:'chart:px', num:r.mid, colorize:true});
         el.style.color = prev==null?'#5b6478':(r.mid>prev?'#1e7e4d':(r.mid<prev?'#c0392b':'#5b6478'));
         chartState.lastPrice=r.mid;
       }
@@ -2938,7 +3172,9 @@ async function jrnLoad(keepSelection) {
 function jrnBadge(n) {
   const b = $('jrnBadge');
   if (!b) return;
-  b.textContent = n;
+  setLiveValue(b, String(n), {key: 'jrn:ungraded', num: n, tween: 450,
+                              wash: true,
+                              fmt: v => String(Math.round(v))});
   b.style.display = n > 0 ? 'inline-block' : 'none';
 }
 
@@ -3761,6 +3997,7 @@ async function scrAddRows() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({text: text, date: $('scrDate').value})}).then(x=>x.json());
     if (!r.ok) { $('scrAddMsg').textContent = r.error; return; }
+    MO.forget('scr:');   /* stale baselines would flash a bogus direction */
     $('scrAddMsg').innerHTML = `Added ${r.imported}.` +
       ((r.problems||[]).length ? ' Skipped: ' +
         r.problems.map(p=>`line ${p.line} (${p.issue})`).join('; ') : '');
@@ -3772,6 +4009,7 @@ async function scrAddRows() {
 async function scrDelete(id) {
   await fetch('/api/watchlist/entry/delete', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({id:id})});
+  MO.forget('scr:');
   scrLoadList();
 }
 
@@ -3788,6 +4026,7 @@ async function scrClear() {
   await fetch('/api/watchlist/clear', {method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({date: $('scrDate').value})});
+  MO.forget('scr:');
   scrLoadList();
 }
 
@@ -3811,10 +4050,25 @@ async function scrRun() {
 }
 
 async function scrLoadBoard() {
+  MO.busy($('scrBoard'), true);
   try {
     const r = await fetch('/api/screen').then(x=>x.json());
     scrRender(r.result, r);
-  } catch (e) { $('scrBoard').textContent = 'Failed: ' + e; }
+    MO.stale($('scrBoard'), false);
+  } catch (e) {
+    /* Keep the last good board. This used to do
+         $('scrBoard').textContent = 'Failed: ' + e
+       which threw away up to fifty cards, and the live prices patched into
+       them, because one poll failed. A board that says it is stale beats an
+       empty one. */
+    const st = $('scrStatus');
+    if (st) st.textContent = 'feed lost — showing the last good board';
+    MO.stale($('scrBoard'), true);
+  } finally {
+    /* In finally, not on the success path: otherwise a failed fetch leaves
+       the board dimmed and the hairline sliding forever. */
+    $('scrBoard').classList.remove('mo-busy');
+  }
 }
 
 // When a play exists it replaces the generic score bar: the grade and the
@@ -3943,6 +4197,10 @@ function scrRender(res, meta) {
   // the level the play is working off both pre-fill from here.
   SCR.rows = {};
   for (const x of res.board.concat(res.bench || [])) SCR.rows[x.ticker] = x;
+  /* Rank changes slide instead of teleporting. data-ticker is already on
+     every .scrCard, so this needs no new attribute and does not touch
+     scrRow -- see MO.flipCapture for why replacing the nodes is fine. */
+  const _snap = MO.flipCapture($('scrBoard'), '.scrCard', 'data-ticker');
   $('scrBoard').innerHTML = res.board.length
     ? res.board.map(x => scrRow(x, false)).join('')
     : `<div style="color:var(--text-dim);padding:14px;">
@@ -3950,6 +4208,7 @@ function scrRender(res, meta) {
   $('scrBench').innerHTML = (res.bench||[]).length
     ? res.bench.slice(0,20).map(x => scrRow(x, true)).join('')
     : '<div style="color:var(--text-dim);font-size:12px;">—</div>';
+  MO.flipPlay($('scrBoard'), '.scrCard', 'data-ticker', _snap, 320);
   scrRenderStatus(res);
 }
 
@@ -4388,7 +4647,9 @@ async function scrPollAlerts() {
     alerts.forEach(a => { scrToast(a); scrNotify(a); });
     const b = $('scrBadge');
     if (b) {
-      b.textContent = (+b.textContent || 0) + alerts.length;
+      const n0 = (+b.textContent || 0) + alerts.length;
+      setLiveValue(b, String(n0), {key: 'scr:alerts', num: n0, wash: true,
+                                   fmt: v => String(Math.round(v))});
       b.style.display = 'inline-block';
     }
     if ($('screenView').style.display === 'flex') scrLoadBoard();
@@ -4427,19 +4688,14 @@ async function scrPollPrices() {
     if (!el) return;
     const px = prices[t].price;
     if (px == null) return;
-    const shown = el.textContent.trim();
-    const next = moneyFull(px);
-    if (shown !== next) {
-      el.textContent = next;
-      // Never clear to '': the element carries its resting colour inline, and
-      // clearing would strip that too and let it inherit the dim parent.
-      // prev is null on the very first tick, and `px > null` coerces to
-      // `px > 0`, so guard it or every row flashes green on arrival.
-      const prev = prices[t].prev;
-      el.style.color = prev == null ? 'var(--text)'
-                     : (px > prev ? 'var(--green)'
-                     : (px < prev ? 'var(--red)' : 'var(--text)'));
-    }
+    // The unchanged-value short-circuit and the first-tick guard both live
+    // in setLiveValue now, for the reasons the old comment here gave: the
+    // element carries its resting colour inline so it must never be cleared
+    // to '', and `px > null` coerces to `px > 0`, so an unguarded compare
+    // flashes every row green on arrival. colorize keeps the resting colour
+    // behaving exactly as it did; the flash and the 4px rise are new.
+    setLiveValue(el, moneyFull(px), {
+      key: 'scr:' + t + ':px', num: px, colorize: true});
   });
 
   // A crossing marks its row for a few seconds. Passive by design.
@@ -4455,6 +4711,7 @@ async function scrPollPrices() {
   const f = $('scrFeed');
   if (!f) return;
   const fd = r.feed || {};
+  f.classList.remove('mo-pulse');
   if (fd.last_error) {
     f.textContent = 'feed error';
     f.style.color = 'var(--red)';
@@ -4463,6 +4720,7 @@ async function scrPollPrices() {
     f.textContent = 'feed idle (outside 04:00-20:00 ET)';
     f.style.color = 'var(--text-dim)';
     f.title = 'the tape is closed; prices resume with it';
+    f.classList.add('mo-pulse');
   } else {
     f.textContent = `live ${fd.priced||0}/${fd.tickers||0} · ${
       (fd.last_tick_at||'').replace('T',' ').slice(11)}`;
