@@ -264,6 +264,22 @@ def reconcile(records=None, legs=None, now=None):
 
 GRADE_ROUND_UP_AT = 0.60
 
+# HOW MUCH OF A POSITION MUST BE GRADED BEFORE THE GRID WILL PRINT A GRADE.
+# Settled 2026-09-29. The case that forced it: an AMC entry of 10 contracts
+# where 1 was sold and graded 2 and the other 9 expired worthless with no exit
+# at all. The weighted mean happily returned 2.0 -- a grade resting on a tenth
+# of the position, standing for the whole decision, indistinguishable in the
+# grid from a trade whose entire exit was graded 2.
+#
+# A majority is the only non-arbitrary bar available, and it is the same claim
+# the collapse makes elsewhere: conditions come from the largest rung because
+# size is what earns the right to speak for the row. Below the bar the grid
+# reads 'none' -- not a downgrade, an abstention. `exit_grade_exact`,
+# `exit_grade_qty` and `exit_grade_coverage` still carry the full picture, so
+# nothing is destroyed and the rule is invertible. It also self-heals: close
+# and grade more of the position and the grade appears.
+GRADE_COVERAGE_MIN = 0.50
+
 
 def round_grade(value):
     """Nate's rule: round up from .60, down below it. None passes through.
@@ -278,22 +294,37 @@ def round_grade(value):
     return whole + 1 if (value - whole) >= GRADE_ROUND_UP_AT - EPS else whole
 
 
+def _is_grade(g):
+    """True only for a real numeric grade. 'none', None and bools are not
+    grades -- a bool would otherwise read as 0 or 1."""
+    return isinstance(g, (int, float)) and not isinstance(g, bool)
+
+
 def _weighted_exit_grade(legs):
     """Quantity-weighted mean of the exit grades present. None if there are
     none -- an entry still fully open, or one whose exits are all ungraded.
 
     Weights are leg quantities, so a rung's influence is the size it closed.
+    This is the mean of what WAS graded and says nothing about how much of the
+    position that was; `_graded_exit_qty` answers that, and the two are read
+    together in `collapse_to_entries`.
     """
     num = den = 0.0
     for l in legs:
         g, q = l.get('exit_grade'), l.get('qty')
-        if isinstance(g, bool) or not isinstance(g, (int, float)):
+        if not _is_grade(g):
             continue                      # 'none', None, or anything odd
         if not q or q <= 0:
             continue
         num += g * q
         den += q
     return (num / den) if den else None
+
+
+def _graded_exit_qty(legs):
+    """How much quantity carries a graded exit. The denominator of coverage."""
+    return sum((l.get('qty') or 0) for l in legs
+               if _is_grade(l.get('exit_grade')) and (l.get('qty') or 0) > 0)
 
 
 def collapse_to_entries(legs=None):
@@ -305,8 +336,15 @@ def collapse_to_entries(legs=None):
       qty_closed        quantity actually closed, which is < qty while a
                         ladder still has rungs pending
       exit_grade_exact  the unrounded quantity-weighted mean
-      exit_grade        that mean under round_grade, or 'none' if there is
-                        no graded exit yet -- the sixth column of the grid
+      exit_grade_qty    how much quantity actually carries a graded exit
+      exit_grade_coverage  that as a fraction of the whole position
+      exit_grade        that mean under round_grade, or 'none' -- the sixth
+                        column of the grid. It reads 'none' both when nothing
+                        is graded yet AND when what is graded covers less
+                        than GRADE_COVERAGE_MIN of the position: a grade on a
+                        minority of the size does not get to speak for the
+                        decision. `exit_grade_exact` is unconditional, so the
+                        sliver's own grade is still there to read.
 
     WHAT AN EXIT-SIDE FILTER MEANS AFTER A COLLAPSE
       A ladder's rungs can close under different conditions, so there is no
@@ -364,6 +402,10 @@ def collapse_to_entries(legs=None):
         biggest = (max(closed, key=lambda l: l.get('qty') or 0)
                    if closed else None)
         exact = _weighted_exit_grade(group)
+        graded_qty = _graded_exit_qty(group)
+        coverage = (graded_qty / qty_total) if qty_total else 0.0
+        grade_stands = (exact is not None
+                        and coverage >= GRADE_COVERAGE_MIN - EPS)
 
         base.update({
             'n_legs': len(group),
@@ -389,7 +431,9 @@ def collapse_to_entries(legs=None):
                         else group[0].get('outcome') if not closed
                         else 'partial'),
             'exit_grade_exact': exact,
-            'exit_grade': round_grade(exact) if exact is not None else 'none',
+            'exit_grade_qty': round(graded_qty, 6),
+            'exit_grade_coverage': round(coverage, 6),
+            'exit_grade': round_grade(exact) if grade_stands else 'none',
             'exit_conditions': ((biggest.get('exit_conditions') or {})
                                 if biggest else {}),
             'exit_tags_good': sorted({t for l in group
@@ -446,6 +490,16 @@ def selftest():
     ck('a zero-qty leg cannot vote',
        _weighted_exit_grade([{'exit_grade': 4, 'qty': 0},
                              {'exit_grade': 1, 'qty': 5}]) == 1)
+
+    # -- graded coverage --
+    ck('coverage counts graded quantity only',
+       _graded_exit_qty(W) == 10 and _graded_exit_qty(
+           [{'exit_grade': 4, 'qty': 1},
+            {'exit_grade': 'none', 'qty': 9}]) == 1)
+    ck('a grade of 0 still counts as covered',
+       _graded_exit_qty([{'exit_grade': 0, 'qty': 5}]) == 5)
+    ck('a bool is not a grade',
+       _graded_exit_qty([{'exit_grade': True, 'qty': 5}]) == 0)
 
     # -- the collapse --
     def leg(eid, xid, qty, xg, pl, hold=10.0, eg=3):
@@ -505,13 +559,56 @@ def selftest():
     half = [leg('E1', '1', 4, 4, 40.0), open_leg]
     h = collapse_to_entries(half)[0]
     ck('a half-closed ladder is one row', len(collapse_to_entries(half)) == 1)
-    ck('its grade counts only the rung that fired', h['exit_grade'] == 4)
+    # CHANGED 2026-09-29. This used to read 4: the one fired rung's grade
+    # stood for the whole decision. 4 of 10 is a minority, so the grid now
+    # abstains -- while exit_grade_exact still reports the rung's own 4.
+    ck('a rung covering a minority of the position does not grade the row',
+       h['exit_grade'] == 'none', h['exit_grade'])
+    ck('but the fired rung keeps its exact grade',
+       h['exit_grade_exact'] == 4.0 and h['exit_grade_coverage'] == 0.4,
+       (h['exit_grade_exact'], h['exit_grade_coverage']))
     ck('qty_closed is less than qty while rungs are pending',
        h['qty_closed'] == 4 and h['qty'] == 10)
     ck("its outcome reads 'partial'", h['outcome'] == 'partial', h['outcome'])
     ck('P/L counts the closed part only', h['pl'] == 40.0)
     ck('pl_pct is not diluted by the open remainder',
        abs(h['pl_pct'] - 0.1) < 1e-9, h['pl_pct'])
+
+    def open_rest(eid, qty):
+        o = leg(eid, None, qty, 'none', 0.0)
+        o.update({'exit_id': None, 'pl': None, 'pl_exact': None,
+                  'exit_cash': None, 'hold_minutes': None,
+                  'outcome': 'open', 'exit_at': None})
+        return o
+
+    exact_half = collapse_to_entries(
+        [leg('E1', '1', 5, 4, 50.0), open_rest('E1', 5)])[0]
+    ck('exactly half the position is enough -- a majority bar includes .50',
+       exact_half['exit_grade'] == 4, exact_half['exit_grade'])
+
+    # The AMC shape: 1 of 10 contracts sold and graded, 9 expired worthless
+    # with no exit record, so they read as open forever.
+    amc = collapse_to_entries(
+        [leg('E1', '1', 1, 2, -5.0), open_rest('E1', 9)])[0]
+    ck('a tenth of the position cannot grade the decision',
+       amc['exit_grade'] == 'none', amc['exit_grade'])
+    ck('its coverage says why', amc['exit_grade_coverage'] == 0.1,
+       amc['exit_grade_coverage'])
+    ck('and the sliver keeps its own grade on the row',
+       amc['exit_grade_exact'] == 2.0 and amc['exit_grade_qty'] == 1)
+
+    # Fully closed, but most of what closed was never graded. Coverage is
+    # about the POSITION, not about how much happened to be gradeable.
+    ungraded_bulk = collapse_to_entries(
+        [leg('E1', '1', 2, 4, 20.0), leg('E1', '2', 8, 'none', -8.0)])[0]
+    ck('a closed trade mostly ungraded also abstains',
+       ungraded_bulk['exit_grade'] == 'none', ungraded_bulk['exit_grade'])
+    ck('its P/L is unaffected by the abstention',
+       ungraded_bulk['pl'] == 12.0, ungraded_bulk['pl'])
+
+    full = collapse_to_entries([leg('E1', '1', 10, 3, 50.0)])[0]
+    ck('a fully graded exit reads 1.0 coverage and keeps its grade',
+       full['exit_grade_coverage'] == 1.0 and full['exit_grade'] == 3)
 
     wide = [leg('E1', '1', 9, 3, 10.0), leg('E1', '2', 1, 0, -1.0)]
     w = collapse_to_entries(wide)[0]

@@ -91,23 +91,40 @@ PORT = 5275
 INVERT_SIGNALS = False
 
 
-def _journal_fill(**kw):
+def _journal_fill(source='engine', **kw):
     """Mirror a fill into the journal noun.
 
     Wrapped whole. The journal is an analysis surface, not part of the
     execution path: a broken journal must never stop a trade from being
     recorded in trade_log.csv or block the bar loop. Failures go to the
     forensics log and are otherwise swallowed.
+
+    `source` is what keeps the hand-graded import, the engine's own fills and
+    hand-placed orders separable -- it is what `journal.read_all(source=...)`
+    filters on and what `jn.purge` targets -- so it is a parameter, not a
+    constant. It was hardcoded to 'engine' until 2026-09-29, which labelled
+    every manual sell as the engine's work.
     """
     try:
         import journal as _jn
-        _jn.log_fill(source='engine', **kw)
+        _jn.log_fill(source=source, **kw)
     except Exception as e:
         try:
             cm.log_forensic('api_event', event='journal_write',
                             status='error', error=f'{type(e).__name__}: {e}')
         except Exception:
             pass
+
+
+def _journal_source(label):
+    """Map an internal action label onto one of `journal.SOURCES`.
+
+    `source` inside _do_entry / _do_exit is a human-readable label that also
+    lands in reason strings ('engine', 'auto-assign', 'manual sell'), while
+    the journal accepts only engine/manual/import. Anything that is not the
+    engine acting unattended is a human decision, so it journals as manual.
+    """
+    return 'engine' if (label or '') == 'engine' else 'manual'
 
 
 def _cond_from_ctx(ctx, decision):
@@ -373,6 +390,7 @@ def _do_entry(ticker, direction, cfg, source='engine', allow_options=True,
                          option_expiry=leg.get('expiry', ''),
                          option_type=leg.get('type', ''))
             _journal_fill(
+                source=_journal_source(source),
                 ticker=ticker, symbol=leg.get('symbol', ticker), side='buy',
                 qty=float(fill.get('filled_qty') or leg.get('contracts') or 0) or 1,
                 price=float(fill.get('filled_avg_price')
@@ -388,6 +406,7 @@ def _do_entry(ticker, direction, cfg, source='engine', allow_options=True,
                          status=fill.get('status', 'submitted'),
                          reason=f"{source} entry ({plan['reason']})")
             _journal_fill(
+                source=_journal_source(source),
                 ticker=ticker, symbol=ticker, side='buy',
                 qty=float(fill.get('filled_qty') or leg.get('qty') or 0) or 1,
                 price=float(fill.get('filled_avg_price')
@@ -404,7 +423,7 @@ def _do_entry(ticker, direction, cfg, source='engine', allow_options=True,
 
 
 def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None,
-             qty=None, exit_kind=None):
+             qty=None, exit_kind=None, source='engine'):
     """Execute an exit for one position sleeve and update state.
 
     qty=None is a FULL exit of the sleeve and is unchanged in every respect.
@@ -414,6 +433,10 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None,
 
     exit_kind overrides the journal's exit_kind condition, so a rung reads as
     'rung' and a ratchet as 'ratchet' rather than inheriting the engine's.
+
+    source is the journal's source field, NOT the reason text. A hand-pressed
+    sell is a manual record even though the exit machinery behind it is the
+    engine's, because `source` answers 'who decided', not 'what code ran'.
 
     Guarded against duplicate fires: if an exit is already in flight on this
     ticker, return immediately. The monitor loop also skips in-flight tickers,
@@ -485,6 +508,7 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None,
                              pnl_pct=round(pnl_p, 2) if pnl_p is not None else '',
                              option_symbol=opt_sym, option_type=opt_type)
                 _journal_fill(
+                    source=_journal_source(source),
                     ticker=ticker, symbol=opt_sym or ticker, side='sell',
                     qty=float(xqty) or 1,
                     price=float(exitpx) if exitpx is not None else 0.0,
@@ -507,6 +531,7 @@ def _do_exit(ticker, sleeve, trigger, is_stop, conditions=None,
                              pnl_dollars=round(pnl_d, 2) if pnl_d is not None else '',
                              pnl_pct=round(pnl_p, 2) if pnl_p is not None else '')
                 _journal_fill(
+                    source=_journal_source(source),
                     ticker=ticker, symbol=ticker, side='sell',
                     qty=float(xqty) or 1,
                     price=float(exitpx) if exitpx is not None else 0.0,
@@ -2648,6 +2673,7 @@ def _panel_plan(body):
     ticker = (body.get('ticker') or '').upper()
     direction = body.get('direction', 'long')
     sleeve = body.get('sleeve', 'shares')
+    hand_picked = False
     if not ticker:
         return None, ({'ok': False, 'reason': 'no ticker'}, 400)
     if sleeve not in ('shares', 'options'):
@@ -2736,7 +2762,9 @@ def _panel_plan(body):
                          if n >= 1 else [])
             reason = (f'{n} contract(s)' if n >= 1
                       else 'budget below one contract')
-            if default_c and chosen['symbol'] != default_c['symbol']:
+            hand_picked = bool(default_c
+                               and chosen['symbol'] != default_c['symbol'])
+            if hand_picked:
                 warnings.append(
                     f"Hand-picked strike: trade_router would have taken "
                     f"{default_c['strike']} exp {default_c['expiry']}.")
@@ -2758,6 +2786,7 @@ def _panel_plan(body):
         'budget': budget, 'default_budget': default_budget,
         'legs': legs, 'contract': chosen, 'est_cash': cash,
         'plan_reason': reason, 'warnings': warnings,
+        'hand_picked': hand_picked,
     }, None
 
 
@@ -2829,7 +2858,7 @@ def order_preview():
         'legs': legs, 'contract': p['contract'],
         'est_cash': round(p['est_cash'], 2),
         'unspent': round(p['budget'] - p['est_cash'], 2),
-        'plan_reason': p['plan_reason'],
+        'plan_reason': p['plan_reason'], 'hand_picked': p['hand_picked'],
         'ladder': ladder, 'ladder_rungs': rungs_out,
         'ladder_describes': ladder_words, 'ladder_error': ladder_error,
         'warnings': warnings,
@@ -2873,6 +2902,42 @@ def manual_buy():
     pos[ticker] = pp
     _save_positions(pos)
 
+    # ── JOURNAL THE FILLS ──
+    # Journalling used to live only in _do_entry, which the panel does not
+    # call, so from the moment combo stopped being the default manual sleeve
+    # nothing hand-placed reached the journal at all -- a panel order was
+    # invisible to pairing, the heatmap and the ledger. Mirrored here rather
+    # than by routing the panel through _do_entry, because _do_entry owns the
+    # engine's one-position and budget-ceiling rules and a manual add is
+    # deliberately exempt from both.
+    meta = {'sleeve': p['sleeve'], 'order_type': kind,
+            'limit_price': p['limit_price'],
+            'hand_picked': p['hand_picked'], 'plan_reason': p['plan_reason'],
+            'placed_from': 'order_panel'}
+    note = f"manual {p['sleeve']} {kind} entry ({p['plan_reason']})"
+    for f in result['filled']:
+        leg = f['leg']; fill = f.get('fill') or {}
+        if leg['kind'] == 'option':
+            _journal_fill(
+                source='manual',
+                ticker=ticker, symbol=leg.get('symbol', ticker), side='buy',
+                qty=float(fill.get('filled_qty') or leg.get('contracts') or 0) or 1,
+                price=float(fill.get('filled_avg_price')
+                            or leg.get('est_premium') or 0),
+                filled_at=datetime.now(ET).replace(tzinfo=None),
+                conditions={}, note=note,
+                meta=dict(meta, strike=leg.get('strike'),
+                          expiry=leg.get('expiry'), type=leg.get('type')))
+        else:
+            _journal_fill(
+                source='manual',
+                ticker=ticker, symbol=ticker, side='buy',
+                qty=float(fill.get('filled_qty') or leg.get('qty') or 0) or 1,
+                price=float(fill.get('filled_avg_price')
+                            or leg.get('est_price') or 0),
+                filled_at=datetime.now(ET).replace(tzinfo=None),
+                conditions={}, note=note, meta=dict(meta))
+
     out = {'ok': True, 'filled': len(result['filled']),
            'failed': len(result['failed']), 'order_type': kind}
     ladder_spec = body.get('ladder')
@@ -2889,7 +2954,8 @@ def manual_sell():
     sleeve = body.get('sleeve', 'both')
     if not ticker:
         return jsonify({'ok': False, 'reason': 'no ticker'}), 400
-    r = _do_exit(ticker, sleeve, 'manual sell', is_stop=False)
+    r = _do_exit(ticker, sleeve, 'manual sell', is_stop=False,
+                 source='manual')
     return jsonify(r)
 
 
