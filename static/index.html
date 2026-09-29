@@ -1755,9 +1755,16 @@ function modalResolve(v) {
 }
 
 /* ── health / status strip ── */
+/* Connectivity, cached here by the 5-second poll so no other loop has to
+   re-ask. startPriceTicker used to call /api/health itself every second,
+   which doubled its request volume to learn something already on screen. */
+let _connected = false;
+
 async function refreshHealth() {
+  if (document.visibilityState === 'hidden') return;
   try {
     const h = await api('/api/health');
+    _connected = !!h.connected;
     $('connDot').className = 'dot' + (h.connected ? ' on' : '');
     $('connText').textContent = h.connected
       ? (h.paper ? 'paper' : 'LIVE') : 'disconnected';
@@ -1770,7 +1777,8 @@ async function refreshHealth() {
       if (a.equity) $('acctEquity').textContent =
         '$' + a.equity.toLocaleString(undefined, {maximumFractionDigits: 0});
     }
-  } catch (e) { $('connText').textContent = 'backend down'; }
+  } catch (e) { _connected = false;
+                $('connText').textContent = 'backend down'; }
 }
 
 async function toggleEngine() {
@@ -1788,6 +1796,7 @@ async function toggleEngine() {
 
 /* ── positions table ── */
 async function refreshPositions() {
+  if (document.visibilityState === 'hidden') return;
   const d = await api('/api/dashboard');
   lastRows = d.rows;
   const tb = $('posBody');
@@ -1991,18 +2000,51 @@ async function drawChart(ticker) {
   startPriceTicker();
 }
 
-async function loadChartBars() {
+async function loadChartBars(opts) {
   const t = chartState.ticker; if (!t) return;
+  const keepView = !!(opts && opts.keepView);
+  /* WHAT THE VIEWPORT WAS LOOKING AT BEFORE THE FETCH.
+     A background refresh must not yank the chart out from under a pan or a
+     zoom. The anchor is a TIMESTAMP, not an index: the feed is a sliding
+     600-bar window, so bars fall off the front as new ones arrive and
+     index 40 is not the same bar two minutes later. */
+  const old = chartState.bars || [];
+  const wasLive = keepView && old.length
+    ? (chartState.viewStart + chartState.viewCount >= old.length) : false;
+  const anchorT = (keepView && old.length && old[chartState.viewStart])
+    ? old[chartState.viewStart].t : null;
+  const heldCount = chartState.viewCount;
   try {
     const d = await api(`/api/bars/${t}?tf=${chartState.tf}&limit=600`);
-    if (d.error || !d.bars || !d.bars.length) { paintEmptyChart(d.error||'no bars'); return; }
+    if (d.error || !d.bars || !d.bars.length) {
+      /* A failed refresh keeps the last good chart. Blanking a chart that
+         was correct a moment ago is strictly worse than showing it a few
+         seconds stale. */
+      if (keepView) return;
+      paintEmptyChart(d.error||'no bars'); return;
+    }
     chartState.bars = d.bars; chartState.ema = d.ema||{};
     chartState.macro = d.macro||{}; chartState.periods = d.periods||{};
     const n = chartState.bars.length;
-    chartState.viewCount = Math.min(70, n);
-    chartState.viewStart = Math.max(0, n - chartState.viewCount);
+    if (keepView && anchorT != null) {
+      /* Follow the tape if he was already at the live edge; otherwise hold
+         the bar he was looking at. Zoom is his: viewCount, priceZoom and
+         priceOffset are never reset by a refresh. */
+      chartState.viewCount = Math.min(heldCount, n);
+      if (wasLive) {
+        chartState.viewStart = Math.max(0, n - chartState.viewCount);
+      } else {
+        let i = d.bars.findIndex(b => b.t >= anchorT);
+        if (i < 0) i = n - chartState.viewCount;
+        chartState.viewStart =
+          Math.max(0, Math.min(i, n - chartState.viewCount));
+      }
+    } else {
+      chartState.viewCount = Math.min(70, n);
+      chartState.viewStart = Math.max(0, n - chartState.viewCount);
+    }
     renderChart();
-  } catch(e){ paintEmptyChart('fetch failed'); }
+  } catch(e){ if (!keepView) paintEmptyChart('fetch failed'); }
 }
 
 function paintEmptyChart(msg){
@@ -2010,6 +2052,38 @@ function paintEmptyChart(msg){
   cv.width=cv.clientWidth;cv.height=cv.clientHeight;
   ctx.fillStyle='#fff';ctx.fillRect(0,0,cv.width,cv.height);
   ctx.fillStyle='#5b6478';ctx.font='13px Segoe UI';ctx.fillText('chart: '+msg,16,26);
+}
+
+/* ── THE CHART REFRESH ──
+   Until 2026-09-29 loadChartBars() was called from exactly two places --
+   drawChart() and setTimeframe() -- and NEITHER WAS A TIMER. The candles and
+   clouds on screen were frozen at whenever a ticker or a timeframe was last
+   clicked, which on a long session could be hours. The one 1-second interval
+   in the app (startPriceTicker) only ever updated the #chartPrice text node
+   and never touched the canvas. This is the timer that was missing.
+
+   10s and not 1s: renderChart() is a full repaint -- session shading, grid,
+   up to three EMA clouds through the polygon builder, candles, volume, axes,
+   crosshair, legend. That is fine at 0.1 Hz and wasteful at 1 Hz. The live
+   price marker is what belongs at 1 Hz and it gets its own overlay canvas
+   later; see design/08 section 5.3.
+
+   Gated on four things: a ticker is selected, the dashboard is actually
+   visible, the window is in the foreground, and no drag is in progress --
+   repainting mid-pan would fight the hand on the mouse. */
+const CHART_REFRESH_MS = 10000;
+
+function chartRefreshDue() {
+  if (!chartState.ticker) return false;
+  if (chartState.drag) return false;
+  if (document.visibilityState === 'hidden') return false;
+  const dash = $('dash');
+  return !!dash && dash.style.display !== 'none';
+}
+
+function chartTick() {
+  if (!chartRefreshDue()) return;
+  loadChartBars({keepView: true});
 }
 
 function macroAtTime(isoT){
@@ -2220,7 +2294,8 @@ function startPriceTicker(){
   window._priceTimer=setInterval(async()=>{
     const t=chartState.ticker; if(!t) return;
     try{
-      const h=await api('/api/health'); if(!h.connected) return;
+      if(document.visibilityState==='hidden') return;
+      if(!_connected) return;   /* cached by refreshHealth; see its comment */
       const r=await fetch(`/api/quote/${t}`).then(x=>x.json()).catch(()=>null);
       if(r&&typeof r.mid==='number'){
         const el=$('chartPrice'); const prev=chartState.lastPrice;
@@ -6465,6 +6540,21 @@ wireChartInteraction();
 refreshAll();
 setInterval(refreshHealth, 5000);
 setInterval(refreshPositions, 10000);
+setInterval(chartTick, CHART_REFRESH_MS);
+
+/* ── FOREGROUND ONLY ──
+   Every poller in this file ran regardless of whether the window was
+   visible, and startPriceTicker's interval was never cleared at all -- so
+   the app kept asking for a quote once a second from the Journal tab with
+   the browser minimised, roughly 3.3 requests a second sustained forever.
+   Nothing here changes WHAT is polled, only WHEN: each loop now returns
+   early while hidden, and on return everything fires once immediately so
+   the first visible frame is current rather than up to ten seconds stale. */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') return;
+  refreshAll();
+  chartTick();
+});
 </script>
 </body>
 </html>
