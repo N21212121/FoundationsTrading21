@@ -721,6 +721,11 @@ def compute_metrics(trades, equity_curve, capital, slippage_bps=0.0,
     ids = {t.get('entry_id') for t in trades if t.get('entry_id')}
     n_entries = len(ids) if ids else n
 
+    # Computed ahead of the dict because win_loss_ratio needs both means.
+    notional_all = sum(abs(t.get('notional') or 0.0) for t in trades)
+    avg_w_pct = _mean([t['ret_pct'] for t in wins])
+    avg_l_pct = _mean([t['ret_pct'] for t in losses])
+
     m = {
         'n_trades': n,
         'n_entries': n_entries,
@@ -732,6 +737,34 @@ def compute_metrics(trades, equity_curve, capital, slippage_bps=0.0,
                          if gross_loss > 0 else float('inf'),
         'expectancy': round(total_pnl / n, 2) if n else 0.0,
         'total_pnl': round(total_pnl, 2),
+        # ── THE RATIO VIEW ────────────────────────────────────────────────
+        # Nate, 2026-09-30: "backtesting random figures, even if meaningful
+        # to me, is not actually worthwhile and detracts from the point of
+        # the backtester; to show success/failures. So I think a 1 trade
+        # ratio would be quite a useful figure."
+        #
+        # He is right that the dollar headline reads like money it is not.
+        # ret_pct has always been computed per trade and then never
+        # aggregated, so this surfaces what was already there.
+        #
+        # TWO MEANS, and they answer different questions:
+        #   expectancy_pct     equal-weighted across trades -- what the
+        #                      AVERAGE TRADE returned. This is his "1 trade
+        #                      ratio" and it is the one to read.
+        #   pnl_on_notional_pct  size-weighted -- what the CAPITAL returned.
+        #                      Bigger positions count more, so it can differ
+        #                      in sign from the one above when the losers
+        #                      were the large ones. That divergence is a
+        #                      finding, not an error.
+        'expectancy_pct': round(_mean([t['ret_pct'] for t in trades]), 4),
+        'avg_win_pct': round(_mean([t['ret_pct'] for t in wins]), 4),
+        'avg_loss_pct': round(_mean([t['ret_pct'] for t in losses]), 4),
+        'pnl_on_notional_pct': (round(total_pnl / notional_all * 100, 4)
+                                if notional_all > 0 else None),
+        # Dimensionless, so a $1,000 name and a $60 name are directly
+        # comparable -- which was the point of the ruling.
+        'win_loss_ratio': (round(avg_w_pct / abs(avg_l_pct), 3)
+                           if avg_l_pct else None),
         'return_on_capital_pct': round(total_pnl / capital * 100, 3),
         'max_drawdown_pct': round(max_dd * 100, 3),
         'sharpe': round(sharpe, 3),
@@ -786,8 +819,12 @@ def format_report(result, title=''):
         f"profit factor {pf if pf != float('inf') else 'inf'}",
         f"avg win ${m['avg_win']}   avg loss ${m['avg_loss']}   "
         f"expectancy ${m['expectancy']}/trade",
+        f"RATIO  avg win {m['avg_win_pct']}%   avg loss {m['avg_loss_pct']}%   "
+        f"per trade {m['expectancy_pct']}%   "
+        f"win/loss {m['win_loss_ratio']}",
         f"total P/L ${m['total_pnl']}   "
-        f"return on capital {m['return_on_capital_pct']}%",
+        f"return on capital {m['return_on_capital_pct']}%   "
+        f"on notional {m['pnl_on_notional_pct']}%",
         f"max drawdown {m['max_drawdown_pct']}%   "
         f"sharpe {m['sharpe']}   sortino {m['sortino']}",
         'exits: ' + ', '.join(f"{k} n={v['n']} ${v['pnl']}"
