@@ -169,7 +169,19 @@ alpaca = AlpacaManager()
 
 _state_lock = threading.RLock()
 _exiting = set()                 # tickers with an exit in flight; monitor skips
-_engine_enabled = False          # auto-trading switch; OFF until user enables
+# AUTO vs MANUAL -- the trading bot's mode. Nate's ruling of 2026-09-30:
+# "change the name of OBSERVE to the state the (trading bot) is in; auto or
+# manual." The old name lied. OBSERVE ONLY sounded like nothing could happen,
+# but manual_buy has never consulted this flag and still places orders, so the
+# switch never meant what it said. It governs UNATTENDED trading and nothing
+# else, and the name now says so.
+#
+# "engine" was also the wrong noun twice over: engine_registry's engines are
+# STRATEGIES assigned to tickers, so ENGINE: ARMED read as though a strategy
+# were armed rather than the bot.
+#
+# OFF until the user enables it, and forced off on startup.
+_auto_trading = False
 
 # _no_rebuy persists to disk so a restart mid-session does NOT clear stop-out
 # blocks. Same-day stops MUST keep blocking same-day rebuys even if the user
@@ -1026,8 +1038,9 @@ def _run_ladder(ticker, bar_close, ctx, d, act=True):
     position closes whole in one order rather than racing two.
 
     The master switch is enforced by the caller. A ladder is unattended order
-    placement, so OBSERVE ONLY has to cover it or the switch does not mean what
-    it says.
+    placement, so MANUAL mode has to cover it or the switch does not mean what
+    it says. A hand-placed order is attended and is not covered; the bot's own
+    rungs are not, and are.
     """
     with _state_lock:
         p = dict(_positions().get(ticker) or {})
@@ -1119,10 +1132,10 @@ def _evaluate_ticker(ticker, cfg, pos, bars):
                       else d['action']),
         notes=(f'[{engine.name}] '
                + ('INVERTED; ' if INVERT_SIGNALS else '')
-               + ('engine_enabled' if _engine_enabled else 'OBSERVE ONLY')),
+               + ('AUTO' if _auto_trading else 'MANUAL')),
     )
 
-    if not _engine_enabled:
+    if not _auto_trading:
         return
 
     a = _invert_action(d['action']) if INVERT_SIGNALS else d['action']
@@ -1193,14 +1206,14 @@ def monitor_loop():
 # ─── ROUTES ────────────────────────────────────────────────────────────────────
 
 def _force_engine_off():
-    """Disarm the engine from outside the routes module.
+    """Drop the bot to MANUAL from outside the routes module.
 
-    Used by the Setup tab: any credential or account-type change drops the
-    engine to OBSERVE ONLY so a live account is never inherited by an engine
-    that was armed against paper.
+    Used by the Setup tab: any credential or account-type change drops the bot
+    to MANUAL so a live account is never inherited by a bot that was set to
+    AUTO against paper.
     """
-    global _engine_enabled
-    _engine_enabled = False
+    global _auto_trading
+    _auto_trading = False
 
 
 import journal_routes
@@ -1218,7 +1231,7 @@ def health():
     return jsonify({
         'connected': alpaca.is_connected(),
         'paper': alpaca.paper,
-        'engine_enabled': _engine_enabled,
+        'auto_trading': _auto_trading,
         'status': _status_message,
         'positions': len(_positions()),
     })
@@ -1249,12 +1262,18 @@ def account():
 
 @app.route('/api/engine', methods=['GET', 'POST'])
 def engine_toggle():
-    global _engine_enabled
+    """GET or set the bot's mode. `enabled` true is AUTO, false is MANUAL.
+
+    MANUAL does NOT mean no orders -- hand-placed orders from the panel go out
+    either way. It means the bot places none by itself. See app.py:172.
+    """
+    global _auto_trading
     if request.method == 'POST':
-        _engine_enabled = bool((request.json or {}).get('enabled', False))
-        cm.log_forensic('conn_event', event='engine_toggle',
-                        status='on' if _engine_enabled else 'off')
-    return jsonify({'enabled': _engine_enabled})
+        _auto_trading = bool((request.json or {}).get('enabled', False))
+        cm.log_forensic('conn_event', event='bot_mode',
+                        status='auto' if _auto_trading else 'manual')
+    return jsonify({'enabled': _auto_trading,
+                    'mode': 'auto' if _auto_trading else 'manual'})
 
 
 @app.route('/api/engines')
@@ -2835,11 +2854,11 @@ def order_preview():
         warnings.append('No daily ATR available; ATR-keyed rungs will refuse.')
     if not legs:
         warnings.append(p['plan_reason'])
-    if ladder_spec and not _engine_enabled:
+    if ladder_spec and not _auto_trading:
         # _run_ladder is gated on the same switch, so a ladder attached while
-        # the app is OBSERVE ONLY is stored and never evaluated. Saying so is
+        # the bot is in MANUAL is stored and never evaluated. Saying so is
         # the difference between a decision and a silent no-op.
-        warnings.append('Engine is OBSERVE ONLY, so this ladder will be '
+        warnings.append('The bot is in MANUAL, so this ladder will be '
                         'stored but never evaluated until the engine is on.')
 
     q = p['quote']

@@ -1098,7 +1098,7 @@
   <div id="status">
     <span><span class="dot" id="connDot"></span><span id="connText">Connecting</span></span>
     <span id="acctEquity"></span>
-    <button id="engineBtn" onclick="toggleEngine()">ENGINE: OBSERVE</button>
+    <button id="engineBtn" onclick="toggleEngine()">BOT: MANUAL</button>
   </div>
 </div>
 
@@ -2386,9 +2386,9 @@ async function refreshHealth() {
     $('connDot').className = 'dot' + (h.connected ? ' on' : ' off');
     $('connText').textContent = h.connected
       ? (h.paper ? 'paper' : 'LIVE') : 'disconnected';
-    engineOn = h.engine_enabled;
+    engineOn = h.auto_trading;
     const b = $('engineBtn');
-    b.textContent = engineOn ? 'ENGINE: ARMED' : 'ENGINE: OBSERVE';
+    b.textContent = engineOn ? 'BOT: AUTO' : 'BOT: MANUAL';
     b.className = engineOn ? 'armed' : '';
     if (h.connected) {
       const a = await api('/api/account');
@@ -2404,10 +2404,11 @@ async function refreshHealth() {
 async function toggleEngine() {
   const want = !engineOn;
   if (want) {
-    const ok = await appConfirm('Arm the engine?',
-      'The engine will begin placing real (paper) orders on signals for ' +
-      'every ticker set to <b>RUN</b>. Tickers on PAUSE are evaluated and ' +
-      'logged but will not enter.', 'ARM ENGINE');
+    const ok = await appConfirm('Switch the bot to AUTO?',
+      'The bot will begin placing orders by itself on signals, for every ' +
+      'ticker set to <b>RUN</b>. Tickers on PAUSE are evaluated and logged ' +
+      'but will not enter.<br><br>MANUAL does not block your own orders &mdash; ' +
+      'it only stops the bot placing them.', 'SWITCH TO AUTO');
     if (!ok) return;
   }
   await api('/api/engine', {enabled: want});
