@@ -29,11 +29,49 @@ So there are now two records, with a clear split:
 **Board URL:** https://claude.ai/artifact/T4B44vTWfwvqBToB7TLWzu
 (private — only the owner can open it)
 
-Rows are `tasks/<id>` and `decisions/<id>`, plus one `meta/snapshot` document
-holding the repo's headline figures so the page has no hardcoded numbers to go
-stale. There is deliberately **no second task list in this file**: two lists
-that mean the same thing will disagree by Tuesday, which is the same rule
-`design/03` applies to level-quality tables.
+Rows are `tasks/<id>` and `decisions/<id>`, plus `meta/snapshot` (the repo's
+headline figures, so the page has no hardcoded numbers to go stale) and
+`meta/lastcheck` (the last whole-board review). There is deliberately **no
+second task list in this file**: two lists that mean the same thing will
+disagree by Tuesday, which is the same rule `design/03` applies to
+level-quality tables.
+
+A task carries `deps` — an array of other task ids — alongside the free-text
+`blocked_on`. The two are not redundant: `deps` is machine-readable and is what
+the graph checks below run on, while `blocked_on` records the things that are
+not tasks (a ruling, a backtester that does not exist yet).
+
+### 0.1 How the board checks itself
+
+Asked for on 2026-09-29: *"maybe there should be an agent involved in checking
+tasks — when new tasks are added — to see if there are any dependencies that
+stack or paradoxes/inconsistencies between any."*
+
+Split in two, along the line this project already draws everywhere else:
+**don't ask a model what you can compute.**
+
+**Computed, in the page, from the `deps` graph.** These are facts, and the
+board states them as facts:
+
+- a **circular dependency** — A waits on B waits on A — which is the literal
+  paradox case
+- a dependency on an id **not on the board**
+- a task marked `blocked` whose dependencies are **all done**
+- a task marked `open` (startable) that **depends on unfinished work**
+- a task marked `blocked` with **nothing recorded** as blocking it
+- **chain depth**, so a task three deep is labelled as such on its own row
+  rather than looking like a quick win
+
+**Reviewed, by Claude, through the page's `sample` capability.** Only the
+question code cannot answer: does this row contradict another row, duplicate
+one, break one of §2's invariants, or belong behind an existing dependency. It
+runs on Add for the single new task, and on demand over the whole board from
+the Consistency box. The result is written to the row's `check` field, so it
+persists and I read it next session.
+
+The two are labelled differently on screen — *computed* and *reviewed* — because
+one is a proof and the other is a judgement, and collapsing them would make the
+judgement look stronger than it is.
 
 ---
 
@@ -264,6 +302,7 @@ the project manager has something to read.
 | `ft-smoke` | Runs the verification that actually exists (§1) and reports real output, pass or fail. | Bash + read |
 | `ft-design` | UI/UX work from `design/08`: depth encodes affordance, palette fixed, logo untouched, one reviewable change at a time. | read + edit |
 | `ft-research` | Feature depth — options P/L graphs with Greeks, simulators — returning a spec draft shaped like `design/NN`, not a link dump. | WebSearch, WebFetch, read |
+| `ft-conflict` | The deeper half of §0.1: reads the whole board *and* the repo, and reports where a row contradicts the code rather than another row — a task whose `ref` points at a moved line, a task already done in a commit nobody closed out, a decision whose recommendation the code has since outgrown. The in-page check sees only the board; this one sees both. | read-only + `ArtifactData` |
 
 **General correctness stays with `/code-review`**, which already exists, is
 tuned, and has a multi-agent cloud mode. Three identical checkers voting was
