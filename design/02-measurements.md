@@ -90,19 +90,42 @@ should say so.
 ### Module constants (the spec — edit + commit to change)
 
 ```python
+# ── EVERY WINDOW BELOW IS MINUTES (ruled 2026-09-30). Convert with
+#    bars_for(minutes, tf). The 10Min column of every conversion reproduces the
+#    bar count this spec was originally reasoned against, exactly.
+#    EMA periods are NOT here: they are bar counts by doctrine.
+
 # --- 5/12 curl (§1) ---
-CURL_LOOKBACK = 3          # closed bars over which the 5/12 gap's slope is measured
-CURL_LEAD_BARS = 5         # a convergent curl counts when the cross is <= this many bars out
-CURL_NOISE_ATR = 0.10      # gap must move >= this many intraday ATRs over the window
+CURL_LOOKBACK = 3          # BARS. slope of the 5/12 gap; a candle count, not a duration
+CURL_LEAD_MINUTES = 50     # a convergent curl counts when the cross is <= this far out
+CURL_SPREAD_MINUTES = 150  # the expansion window. Measured: argmax is ~150 min on
+                           # every timeframe, where the BAR COUNT differs by 2.3x
+CURL_SPREAD_RECENT = 3     # BARS. Nate's "3 candles", and the measured optimum
+CURL_SPREAD_FIELD = 'range'  # 'range' (high-low) or 'body' (|close-open|). RULED
+                           # 'range' 2026-09-30: same idea, AUC 0.707 vs 0.638
+CURL_SPREAD_QUIET = None   # <- SET IN §1. The one constant the ruling left open:
+                           # 0.70 was derived against a BODY null and does not
+                           # transfer to range, which is a tighter estimator
+CURL_SPREAD_TRAVEL = 0.10  # hygiene only: the degenerate -gap/slope case, 0.30% of bars
+CURL_SPREAD_MIN_BARS = 8   # below this the window is None, not a guess
+CURL_SPREAD_RTH_ONLY = True  # the spread window only. See §1 -- 59% of a 10Min
+                             # stream is extended hours and its candles are 27-48%
+                             # the size, which would pass everything until 11:30
+# CURL_NOISE_ATR -- DELETED 2026-09-30. Not uncalibrated: actively harmful.
+#   Negative lift at every threshold over 8,311 firings; the bars it discarded
+#   hit MORE often than the ones it kept; phi = +0.005 against Nate's own hand
+#   labels. See design/10 and OPEN DECISIONS #2.
 
 # --- momentum (§2) ---
-MOM_BARS = 6               # displacement window, in BARS
+MOM_MINUTES = 60           # displacement window. 6 bars at 10Min, 10 at 6Min
 MOM_STRONG = 2.0           # >= 2 random-walk displacements
 MOM_MODERATE = 1.0         # the random-walk null itself
 MOM_WEAK = 0.4             # below this = 'none' (Low Momentum Environment)
 
 # --- chop vs coil (§3) ---
-CHOP_LOOKBACK = 12         # one full slow-EMA span
+CHOP_MINUTES = 120         # one full slow-EMA span at 10Min
+COIL_RECENT_MINUTES = 60   # compression numerator: one CHOP window
+COIL_PRIOR_MINUTES = 240   # compression denominator: the two before it
 CHOP_CROSSES = 3           # >= this many 5/12 side changes in the window IS chop
 COIL_CROSSES = 1           # <= this many, with low ER, is a coil
 ER_LOW = 0.35              # efficiency ratio at or below this = going nowhere
@@ -167,7 +190,8 @@ is not a metaphor in this formulation; it is the number.
 Two flavours, both of which the owner calls a curl ("rolling toward/away"):
 
 - **Convergent curl** — `sign(slope) != sign(gap)`, the pair is closing.
-  `bars_to_cross <= CURL_LEAD_BARS` → state `curl_up` / `curl_down`, favouring
+  `bars_to_cross <= bars_for(CURL_LEAD_MINUTES, tf)` → state `curl_up` /
+  `curl_down`, favouring
   `sign(slope)`. This is the pre-cross curl and the valuable one.
 - **Divergent curl** — `sign(slope) == sign(gap)`, the pair is opening in the
   direction it already has. State `expand_up` / `expand_down`, favouring
@@ -175,33 +199,152 @@ Two flavours, both of which the owner calls a curl ("rolling toward/away"):
   what "5/12 Curl" looks like on the trades where the cross already fired, and
   omitting it would under-report the tag by roughly half.
 
-### The noise guard — what separates a curl from a flat tape
+### The noise guard — REPLACED 2026-09-30
 
-This is the part that matters. In a flat tape both EMAs sit on top of each
-other, `gap ≈ 0` and `slope ≈ 0`, and `bars_to_cross = -gap/slope` is a ratio
-of two numbers that are both noise. It will return `0.3 bars` on one bar and
-`800 bars` on the next, and a naive implementation reports a screaming curl
-on every second bar of the dullest chart on the board.
+The problem it solves is unchanged and still the part that matters. In a flat
+tape both EMAs sit on top of each other, `gap ≈ 0` and `slope ≈ 0`, and
+`bars_to_cross = -gap/slope` is a ratio of two numbers that are both noise. It
+returns `0.3 bars` on one bar and `800 bars` on the next, and a naive
+implementation reports a screaming curl on every second bar of the dullest
+chart on the board. (Measured: that degenerate case is 0.30% of bars and the
+naive detector fires on 80% of them.)
 
-The guard is on the NUMERATOR OF THE MOVEMENT, not on the ratio:
+**What changed is the answer.** The old guard tested the movement of the EMA
+GAP against intraday ATR. It did not work — see OPEN DECISIONS #2: negative
+lift at every threshold across 8,311 firings, and φ = +0.005 against the
+owner's own hand labels. The mechanism of the failure generalises and is worth
+stating: **`gap_travel` is a property of the INDICATOR, and the thing being
+guarded against is a property of the TAPE.** Something derived from price cannot
+tell you whether price is doing anything.
+
+The new guard asks the tape directly, and it is the owner's own formulation
+(2026-09-30) — *"candle open and close size across a moving range"* — with his
+*"3 candles of increasing volume"* structure and candle spread standing in for
+volume:
 
 ```
-gap_travel = |gap[-1] - gap[-1 - CURL_LOOKBACK]|
-if atr_i is None or gap_travel < CURL_NOISE_ATR * atr_i:
-    state = 'flat'
+n      = bars_for(CURL_SPREAD_MINUTES, tf)     # 15 at 10Min, 25 at 6Min
+window = rth_only(closed_bars)[-n:]            # SEE BELOW -- not optional
+spread = high - low   for each bar             # CURL_SPREAD_FIELD
+if len(window) < CURL_SPREAD_MIN_BARS:
+    return None                                # unknown, never 'flat'
+
+E = mean(spread[-CURL_SPREAD_RECENT:]) / mean(spread)
+
+if E <= CURL_SPREAD_QUIET:
+    state = 'flat'          # ... unless section 3 says coil. SEE THE CARVE-OUT.
 ```
 
-The 5/12 separation must have actually moved at least a tenth of one bar's
-true range over three bars. Below that, the pair is not turning, it is
-vibrating, and no extrapolation of it means anything.
+`E` is **expansion**: is the tape doing more in the last three candles than it
+has been doing all window. AUC 0.676 against forward movement, against the old
+guard's *negative* lift.
+
+**Say plainly what this is.** The mechanism is volatility autocorrelation —
+quiet tapes stay quiet, busy tapes stay busy — not curl detection. It earns its
+place by predicting **whether** a move happens, and that is all it is claimed to
+do. See THE FLAG below.
+
+**A straight substitution would have been worthless.** Testing
+`gap_travel < k × mean_spread` — the same numerator with a new denominator —
+measured lift +0.000 to +0.007, because `mean(body) ≈ 0.46 × atr_i` makes the
+two constants near-translations of each other. The owner's ruling works because
+of the RATIO, not because of the units.
+
+### The field is the RANGE, and the threshold had to be re-derived
+
+`CURL_SPREAD_FIELD = 'range'`, ruled 2026-09-30 (board `d-body-vs-range`).
+`high - low` beats `|close - open|` at the identical construction: AUC 0.707
+against 0.638, separating kept from killed bars 4.01:1 against 1.84:1. They
+correlate 0.83, so it is the same idea measured better. Parkinson (1980) gives
+the reason — a range-based volatility estimator is several times more efficient
+than a close-based one. Still no volume in it: high and low are price.
+
+**The trap that created, and why the constant is not 0.70.** `design/10` derived
+`QUIET = 0.70` against a **body** null. Range is the tighter estimator, so its
+null distribution is far narrower — simulated null standard deviation **0.171
+against body's 0.392**, which is the Parkinson efficiency showing up directly.
+Carrying 0.70 across would have fired the guard on **2.6% of a dead tape instead
+of 23.6%.** It would have looked installed and done essentially nothing.
+
+Re-derived at the same null percentile (200,000 draws, 48 intra-bar substeps,
+driftless walk, unit bar volatility):
+
+| N | p20 of the range null | equivalent of body's 0.70 |
+|---|---|---|
+| 15 (`10Min`) | 0.854 | **0.872** |
+| 25 (`6Min`) | 0.846 | **0.872** |
+| 50 (`3Min`) | 0.841 | **0.871** |
+
+`CURL_SPREAD_QUIET = 0.87`. Stable to three decimals across every timeframe, so
+it needs no per-feed value — the same conclusion the lookback ruling reached
+from the other direction.
+
+### The window must be regular hours only
+
+`CURL_SPREAD_RTH_ONLY = True`, and this is not a preference. The SIP feed runs
+04:00–20:00, so a `10Min` stream carries 96 bars per calendar day of which 39
+are regular hours — **59% extended**. Extended-hours candles measure 27–48% of
+regular-hours ones and it varies by name (XLU 0.27, KO 0.31, SPY 0.48).
+`screener_service.drop_forming` removes only the in-progress bar; nothing
+anywhere filters the stream to RTH.
+
+Without this, a 15-bar window at 09:40 is fourteen pre-market bars, `E` reads
+enormous, and **the guard passes everything through the first two hours of every
+session while appearing to work.**
+
+Filter the SPREAD WINDOW only. The EMAs stay on the continuous stream, because
+changing what the 5/12 pair is computed over is a trading change, not a
+measurement one. Bar budgets already cover it: `6Min` yields ~106 RTH bars from
+`INTRA_BARS = 260`, `10Min` ~122 from the cache.
+
+### The coil carve-out, which is not optional either
+
+A coil is by definition the state where spread has collapsed, so this guard
+kills **49.7% of coils** — a higher rate than it applies to chop. Those are the
+owner's best setups: among curl firings, killed-coil bars went on to move
+**26.47%** of the time against killed-non-coil **8.45%** (Welch t = +10.56).
+
+So `'flat'` is suppressed when section 3 classifies the window as `coil`, and a
+new state `'coiled'` is emitted instead, with **`side = None`**. It is a bucket,
+not a debit — the compression is real information and its direction is not.
+Adding the carve-out keeps MORE firings (70.2% against 61.5%) *and* sharpens
+both sides (kept 18.30% against 17.13%, killed 8.37% against 12.49%). A strict
+win, which is rare enough to be worth treating as suspicious; it was checked
+twice.
+
+### THE FLAG: this measure does not carry direction
+
+After the guard passes a firing, the chance of a move **with** the curl is
+17.13% and **against** it is 17.03%. **Ratio 1.01.** The guard separates whether
+a move happens (26% coiled against 8% flat, 3.2×) and says nothing whatever
+about which way.
+
+`design/01`'s A1 gives `curl_512` three credits — joint-heaviest on the sheet —
+and scores 4 when the curl agrees with the trade direction against 0 when it
+opposes. **That 4-versus-0 is not supported by this measurement.**
+
+It is also not refuted by it, which is why A1 stands unchanged. This measure
+scores **AUC 0.530 against the owner's own `5/12 Curl` tag** — statistically
+unrelated to what he means by a curl. A1's credit was earned from his graded
+book (+$21.67 on n=53 against −$30.59 on n=40, the widest spread of any tag he
+writes), and a detector that does not correlate with his tag cannot overturn
+evidence about his tag. **Board `d-curl-direction` — raised, and he deferred it
+2026-09-30.** The flag lives here, against the sibling that computes the
+mechanical curl, which is the honest place for it.
 
 ### Thresholds and where they come from
 
 | constant | value | basis |
 |---|---|---|
 | `CURL_LOOKBACK` | 3 bars | **Judgement, reasoned.** The 5-EMA's centre of mass sits ~2 bars back, the 12-EMA's ~5.5. At `k=1` the slope is one bar of noise. At `k=6` the cross has usually already happened, so the measure stops being a lead and becomes a lagging confirmation of the thing `trend_context` already reports. 3 is the widest window that still sits inside the fast EMA's memory. |
-| `CURL_LEAD_BARS` | 5 bars | **Judgement.** Half the slow EMA's span. A cross projected 20 bars out is not a curl, it is a hope. |
-| `CURL_NOISE_ATR` | 0.10 | **Judgement, and the number I am least sure of.** It should be calibrated: log `gap_travel / atr_i` to `screen_history` for a month and set the constant at the ~60th percentile of readings, so `flat` fires on the majority of a dull tape but not on a live one. Until then, 0.10 is a guess with a rationale and nothing more. |
+| `CURL_LEAD_MINUTES` | 50 min | **Judgement.** Half the slow EMA's span at `10Min`. A cross projected 20 bars out is not a curl, it is a hope. Was `CURL_LEAD_BARS = 5`; a duration now like every other window. **Unmeasured** — nothing in `design/10` tested it. |
+| `CURL_SPREAD_MINUTES` | 150 min | **MEASURED.** Argmax of AUC, and the same duration on every timeframe (102 min at `3Min`, 144 at `6Min`, 150 at `10Min`) while the bar count differs by 2.3×. This is the constant that forced OPEN DECISIONS #1. |
+| `CURL_SPREAD_RECENT` | 3 bars | **MEASURED, and the owner's own number.** He offered "3 candles" as a guess; at `6Min` 2 and 3 tie at AUC 0.582/0.581. Stays a candle COUNT, not a duration. |
+| `CURL_SPREAD_FIELD` | `'range'` | **RULED 2026-09-30**, on AUC 0.707 against body's 0.638, plus Parkinson (1980). |
+| `CURL_SPREAD_QUIET` | 0.87 | **DERIVED**, not judged — body's null percentile re-solved for range. 0.70 would have fired on 2.6% of a dead tape instead of 23.6%. |
+| `CURL_SPREAD_TRAVEL` | 0.10 | **Hygiene only.** The one thing the old `CURL_NOISE_ATR` was good for: catching the degenerate `-gap/slope` case, 0.30% of bars. Kept at its old value because nothing about that case changed. |
+| `CURL_SPREAD_MIN_BARS` | 8 | **Judgement.** Below this the window returns `None`. Unknown is a bucket, never a silent `'flat'`. |
+| ~~`CURL_NOISE_ATR`~~ | ~~0.10~~ | **DELETED.** Not a calibration debt — a wrong measure. See OPEN DECISIONS #2. |
 
 ### Evidence that this deserves heavy credit in the GPA
 
@@ -284,16 +427,18 @@ scalar, reported as a band.
 ### Formula
 
 ```
-travel = close[-1] - close[-1 - MOM_BARS]
-mom    = travel / (atr_i * sqrt(MOM_BARS))
+n      = bars_for(MOM_MINUTES, tf)          # 6 at 10Min, 10 at 6Min, 20 at 3Min
+travel = close[-1] - close[-1 - n]
+mom    = travel / (atr_i * sqrt(n))
 ```
 
 The `sqrt(N)` is the only piece of this spec that is not judgement. A random
 walk's expected absolute displacement over N bars of typical range `atr_i` is
 `atr_i * sqrt(N)`. Dividing by it makes `|mom| ≈ 1.0` **the null** — the
 distance a directionless tape covers by accident — and makes the thresholds
-independent of `MOM_BARS`. Without it, every band edge would have to be
-retuned the moment anyone changed N, and someone will change N.
+independent of N. Without it, every band edge would have to be retuned the
+moment anyone changed the window — and someone did: N became a function of bar
+width on 2026-09-30 and not one band moved.
 
 ### Bands
 
@@ -304,12 +449,20 @@ retuned the moment anyone changed N, and someone will change N.
 | `weak` | `0.4 <= |mom| < 1.0` | **Judgement.** Below the null: less ground covered than chance. |
 | `none` | `|mom| < 0.4` | **Judgement.** Under half the null — visibly going nowhere. |
 
-`MOM_BARS = 6` is **judgement**: six bars is one hour at 10-min, and the
-owner's holds run tens of minutes to a couple of hours, so the window should
-span about one hold. Note that N is in BARS, so the same constant means 60
-minutes on the engine's `10Min` feed and 36 minutes on the screener's `6Min`
-feed — see **OPEN DECISIONS** below, this needs resolving before the GPA
-ships.
+`MOM_MINUTES = 60` is **judgement**: an hour, because the owner's holds run
+tens of minutes to a couple of hours and the window should span about one hold.
+
+**It is a duration, not a bar count** (ruled 2026-09-30 — see *Lookbacks are
+durations* under OPEN DECISIONS). It was `MOM_BARS = 6`, which meant an hour on
+the engine's `10Min` feed and 36 minutes on the screener's `6Min` feed; that
+defect is now closed, and the `10Min` behaviour is unchanged because
+`bars_for(60, '10Min') == 6`.
+
+**The `sqrt(N)` is what makes this conversion free.** Because the bands are
+expressed against the random-walk null, they do not move when N does — which
+was the stated reason for the normalisation before anyone knew the lookback
+would have to become a duration. It is the only constant in this spec that
+needed no re-derivation to survive the ruling.
 
 ### Calibration plan for the band edges
 
@@ -325,7 +478,8 @@ guess and should be labelled as one in the UI.
 **The band, plus one boolean.** Not the scalar.
 
 ```python
-def momentum(df, atr_i=None, bars=MOM_BARS):
+def momentum(df, atr_i=None, tf='6Min', bars=None):
+    # bars=None -> bars_for(MOM_MINUTES, tf). Passing bars overrides, for tests.
     """ATR-normalized directional travel. Magnitude, not tidiness."""
 ```
 
@@ -344,8 +498,10 @@ def momentum(df, atr_i=None, bars=MOM_BARS):
 that has not moved is a fabricated number, and the GPA would happily grade
 alignment against it.
 
-- **Minimum data:** `MOM_BARS + 1` closes = 7, plus 15 for `atr_i` → **16
-  closed intraday bars**.
+- **Minimum data:** `bars_for(MOM_MINUTES, tf) + 1` closes, plus 15 for
+  `atr_i` → **16 closed bars at `10Min`, 26 at `6Min`.** The requirement rises
+  on a faster feed because the window is a fixed duration; that is the point,
+  and `screener_service.INTRA_BARS = 260` covers it comfortably.
 - **Failure mode:** short history or `atr_i` in `(None, 0)` → everything
   `None` except `low_momentum=False` and a reason. `low_momentum` must be
   `False`, not `True`, on missing data: an unmeasured environment is unknown,
@@ -392,7 +548,8 @@ sentence this section exists to deliver.
 
 ### Machinery
 
-Three numbers over `CHOP_LOOKBACK = 12` closed bars:
+Three numbers over `bars_for(CHOP_MINUTES, tf)` closed bars — 12 at `10Min`,
+20 at `6Min`, 40 at `3Min`:
 
 ```
 # 1. cross count -- the separator
@@ -407,7 +564,10 @@ crosses = count of t in the window where side[t] != side[t-1] and both are in
 er = |close[-1] - close[-1-k]| / sum(|close[i] - close[i-1]| for the k steps)
 
 # 3. compression -- identifies the coil
-compression = atr_i(last 6 bars) / atr_i(the 24 bars before those)
+#    windows are DURATIONS: one CHOP window against the two before it
+r = bars_for(COIL_RECENT_MINUTES, tf)     # 6 at 10Min, 10 at 6Min
+q = bars_for(COIL_PRIOR_MINUTES, tf)      # 24 at 10Min, 40 at 6Min
+compression = atr_i(last r bars) / atr_i(the q bars before those)
 ```
 
 ### Classification
@@ -426,15 +586,35 @@ the cloud three times on the way up is not labelled chop.
 
 | constant | value | basis |
 |---|---|---|
-| `CHOP_LOOKBACK` | 12 bars | **Judgement, reasoned.** One full slow-EMA span: the window over which the 5/12 pair has completely refreshed its memory. It is also long enough that three crosses cannot be produced by a single indecisive bar pair. |
+| `CHOP_MINUTES` | 120 min | **Judgement, reasoned.** Two hours — one full slow-EMA span on `10Min`, the window over which the 5/12 pair has completely refreshed its memory, and long enough that three crosses cannot come from a single indecisive bar pair. Was `CHOP_LOOKBACK = 12` bars; `bars_for(120, '10Min') == 12`, so `10Min` is unchanged. |
 | `CHOP_CROSSES` | 3 | **Judgement, and the number I would defend hardest.** Not a ratio — a count of discrete failures. One cross is a commitment. Two is a commitment and a reversal. Three is the tape changing its mind twice, which is the owner's own `5/12 Not Followed` written as a measurement (90 trades, avg grade 0.90). |
 | `ER_LOW` | 0.35 | **Judgement.** Net move under a third of the distance travelled: two-thirds of the effort retraced. |
 | `ER_TREND` | 0.60 | **Judgement.** |
-| `COIL_COMPRESSION` | 0.70 | **Judgement.** The recent 6 bars' range at 70% or less of the prior 24's. The 6/24 split is one CHOP window against the two before it. |
+| `COIL_COMPRESSION` | 0.70 | **Judgement.** The recent window's range at 70% or less of the prior stretch's. |
+| `COIL_RECENT_MINUTES` / `COIL_PRIOR_MINUTES` | 60 / 240 | One CHOP window against the two before it, expressed as durations. `10Min` reproduces the original 6/24 exactly. |
 
-All five are judgement. The STRUCTURE — cross count separates, ER confirms,
+All of them are judgement. The STRUCTURE — cross count separates, ER confirms,
 compression identifies the coil — is the claim; the numbers are first guesses
 and the UI should say so.
+
+### The coil is load-bearing, and its bar counts were the bug
+
+`design/10`'s measurement makes this section more important than it looked. A
+curl guard built on spread expansion **kills 49.7% of coils** — a higher rate
+than it applies to chop — because a coil is by definition the state where
+spread has collapsed. And the coils it kills are the best setups on the sheet:
+among curl firings, killed-coil bars went on to move **26.47%** of the time over
+18 bars against killed-non-coil **8.45%** (Welch t = +10.56). So §3's `coil`
+label is what stops §1's guard throwing away the owner's best environment, and
+the carve-out is a **strict win** — it keeps more firings (70.2% against 61.5%)
+*and* sharpens both sides.
+
+**That result inverted on `6Min` using this section's bar counts as literally
+written** — killed-coil 6.02% against killed-non-coil 10.25%, t = −2.89 — and
+reproduced cleanly once the windows became durations. This section's own
+constants carried the defect that OPEN DECISIONS #1 now closes, and the coil
+carve-out is where it would have shown up as a wrong answer rather than a
+warning.
 
 ### Why not range overlap between consecutive bars
 
@@ -461,7 +641,9 @@ not the same thing as an edge. Do not let the rubric imply otherwise.
 ### Signature and return
 
 ```python
-def chop(df, atr_i=None, fast=5, slow=12, lookback=CHOP_LOOKBACK):
+def chop(df, atr_i=None, fast=5, slow=12, tf='6Min', lookback=None):
+    # lookback=None -> bars_for(CHOP_MINUTES, tf). fast/slow stay BAR COUNTS:
+    # they are EMA periods, and EMA periods are bar counts by doctrine.
     """Chop vs coil vs trend. The cross count is the separator."""
 ```
 
@@ -960,25 +1142,77 @@ converts and `environment.py` takes DataFrames only.
 
 ## OPEN DECISIONS FOR THE OWNER
 
-1. **`6Min` or `10Min`?** The engine runs the Ripster logic on `10Min`
-   (`engine_ripster.timeframes['primary']`). The screener — which is where the
-   GPA will live — runs on `INTRA_TF = '6Min'`. Every lookback in this spec is
-   in BARS, so `CHOP_LOOKBACK = 12` means 120 minutes on one feed and 72 on
-   the other, and `MOM_BARS = 6` means an hour or 36 minutes. The thresholds
-   cannot be right for both. **Recommendation: standardize the screener on
-   `10Min`.** The GPA is grading the environment the engine trades in, and if
-   the two read different candles they will eventually disagree about a curl,
-   which is precisely the failure `screener.py`'s own docstring says it exists
-   to avoid ("the screen and the engine can never disagree about what the
-   chart says"). If `6Min` must stay, then every bar-count constant here needs
-   a second column and the module needs `bar_minutes` to select it — worse, and
-   worse for the same reason.
-2. **`CURL_NOISE_ATR` and the momentum band edges are the two calibration
-   debts.** Both have a concrete plan (log the scalar to `screen_history.py`,
-   set the constant from the distribution against the tag frequency the owner
-   has already supplied: 36% for `Low Momentum`, 33% for `Choppy`). Neither
-   should be presented in the UI as anything but a first guess until that data
-   exists.
+**BOTH RULED 2026-09-30. Neither went the way this section recommended.**
+
+1. ~~**`6Min` or `10Min`?**~~ **RULED, and my recommendation was wrong twice
+   over.** The owner ruled the screener stays `6Min` as a universal and the
+   engine moves toward it (board `d-screener-tf`), so the project runs two bar
+   widths permanently and standardising is off the table. I then argued that a
+   `bar_minutes` selector would be "worse"; **measurement says it is required**
+   (board `d-bar-minutes`, ruled on the recommendation). The optimal lookback
+   is the same DURATION on every timeframe — 102 min at `3Min`, 144 at `6Min`,
+   150 at `10Min` — while the bar COUNT that achieves it differs by 2.3x. A
+   constant in bars is therefore wrong on every feed but the one it was tuned
+   on.
+
+   It is also not "a second column." It is **one division**, in one helper, and
+   `halflife.TF_MINUTES` already holds the widths. See *Lookbacks are durations*
+   below.
+
+   **The evidence this is not theoretical:** §3's coil carve-out works on
+   `10Min` and **inverts** on `6Min` when §3's bar counts are used as literally
+   written — killed-coil 6.02% against killed-non-coil 10.25%, t = −2.89. Re-run
+   with constant-MINUTE windows it reproduces `10Min` cleanly: 34.22% against
+   12.26%, t = +5.08. Same code, same data; only the window units changed and
+   the sign of the finding flipped.
+
+2. ~~**`CURL_NOISE_ATR` and the momentum band edges are the two calibration
+   debts.**~~ **Half resolved, and worse than a debt.** `CURL_NOISE_ATR` was not
+   uncalibrated — it was **actively harmful**: across 8,311 curl firings it
+   measured *negative* lift at every threshold, discarding bars that hit MORE
+   often than the ones it kept, with φ = +0.005 against the owner's own hand
+   labels. It is **deleted**, not calibrated (§1, and `design/10`). The momentum
+   band edges remain a genuine debt with the plan below intact: log `mom` to
+   `screen_history.py` and set `MOM_WEAK` against the 36% `Low Momentum` tag
+   frequency the owner has already supplied.
+
+### Lookbacks are durations, not bar counts
+
+```python
+import halflife as hlf
+
+def bars_for(minutes, tf, minimum=2):
+    """A duration, in bars of `tf`. The ONE place bar width enters a lookback.
+
+    Ruled 2026-09-30. Every window constant in this spec is a number of
+    MINUTES; this converts it at read time. EMA periods are NOT converted --
+    they are bar counts by definition and by doctrine (design/00 §2), and
+    changing what the 5/12 pair is computed over is a trading change, not a
+    measurement one.
+    """
+    width = hlf.TF_MINUTES.get(tf)
+    if not width:
+        raise ValueError(f'unknown timeframe {tf!r}')
+    return max(minimum, int(round(minutes / width)))
+```
+
+| duration | `3Min` | `6Min` | `10Min` |
+|---|---|---|---|
+| `CURL_SPREAD_MINUTES` 150 | 50 | 25 | 15 |
+| `MOM_MINUTES` 60 | 20 | 10 | 6 |
+| `CHOP_MINUTES` 120 | 40 | 20 | 12 |
+| `COIL_RECENT_MINUTES` 60 | 20 | 10 | 6 |
+| `COIL_PRIOR_MINUTES` 240 | 80 | 40 | 24 |
+
+**Every `10Min` column is the old bar count**, by construction: the durations
+were chosen so the constant this spec was written against is preserved exactly
+on the feed it was reasoned on. Nothing about the `10Min` behaviour changes.
+What changes is that `6Min` stops being silently wrong.
+
+**Two constants stay in bars, deliberately.** `CURL_SPREAD_RECENT = 3` is the
+owner's "3 candles" and the measured optimum on both feeds independently (at
+`6Min`, 2 and 3 tie at AUC 0.582/0.581) — it is a count of candles, not a
+duration. `EMA_WARMUP_SPANS` multiplies EMA periods, which are bar counts.
 
 ## WHAT THIS SPEC DELIBERATELY DOES NOT DO
 
