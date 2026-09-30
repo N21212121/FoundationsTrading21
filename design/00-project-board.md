@@ -292,8 +292,40 @@ is built. That single module is the project's critical path.
 
 ## 4. THE AGENT ROSTER
 
-Settled 2026-09-29, **not yet built.** Queued deliberately behind the board so
-the project manager has something to read.
+**Built 2026-09-29.** Definitions live in `.claude/agents/`, one file each.
+
+### 4.0 Where they live, and why there are two copies
+
+Canonical copies are in **this repo**, at `.claude/agents/`, so they version
+alongside the code they know about and a change to one shows up in a diff.
+
+They are also installed at **`~/.claude/agents/`**, because agent discovery when
+the session's working directory is not the repo is **undocumented** — and
+sessions here have in fact run from `C:\Users\nateu` while the code sits at
+`C:\Foundations Trading`. A repo-only definition would silently fail to load in
+that case, and an agent that is invoked and does nothing is worse than one that
+does not exist.
+
+This is two copies of the same thing, which §2.7 normally forbids. The
+distinction that makes it acceptable: **the repo is the source of truth and the
+user-level copy is a deployment artifact**, the way a build output is. It is not
+a second place to edit. After changing a definition, re-deploy:
+
+```
+cp ".claude/agents/"*.md ~/.claude/agents/
+```
+
+Documented precedence is project over user, so when a session does start in the
+repo, the canonical copy wins — which is the behaviour we want.
+
+### 4.1 The roster
+
+**Every one of the six carries `disallowedTools: Agent`.** None of them can
+dispatch another agent. This is deliberate and it is the structural version of
+§1: a roster whose members can each fan out is a roster that can generate more
+work in an hour than the owner can read in a week, which is the exact failure
+this file was written in response to. Fan-out stays a decision the owner makes,
+in the main session, one at a time.
 
 | Agent | Job | Tools |
 |---|---|---|
