@@ -78,6 +78,7 @@ def to_et(dt):
 # outside this list; they are preserved and simply not offered in the UI
 # until added here. Ordering is the order they appear in the layer picker.
 CONDITION_KEYS = [
+    'trade_type',   # ripster / scalp / swing -- see TRADE_TYPES
     'srp',          # S/R/P followed: Correctly / Incorrectly / N/A
     'ema_5_12',     # price vs the 5/12 cloud: above / below / inside / at
     'ema_34_50',    # price vs the 34/50 cloud
@@ -89,6 +90,53 @@ CONDITION_KEYS = [
 ]
 
 SOURCES = ('engine', 'manual', 'import')
+
+# ─── TRADE TYPE ────────────────────────────────────────────────────────────────
+#
+# WHAT KIND OF TRADE THIS WAS MEANT TO BE. Three, and only three:
+#
+#   ripster   the system proper -- 34/50 hard trend gate, 5/12 cross entry,
+#             structural exit. What the engine trades and what the whole book
+#             before 2026-09-28 was, by blanket assignment.
+#   scalp     a deliberate quick in-and-out, typically on an index name. The
+#             owner's own description: he trades Ripster but likes to scalp SPY.
+#   swing     a hold measured in days, governed by the 1H and 1D clouds rather
+#             than by the working timeframe.
+#
+# WHY THIS IS A CONDITION AND NOT A TOP-LEVEL FIELD
+#   `conditions` is already the thing the heatmap slices by -- heatmap.py maps
+#   every key here to an `entry_<key>` layer with no per-key code. Putting the
+#   trade type anywhere else would mean writing a layer by hand to answer the
+#   first question anyone will ask of it ("how do my scalps grade against my
+#   Ripster trades?"). It is the same free win `exit_kind` got.
+#
+# WHY THE VOCABULARY IS CLOSED
+#   The other condition keys are open on purpose: a record may carry a value
+#   the UI has not seen. This one may not. A stray 'Scalp' or 'scalping' would
+#   silently split a heatmap column in two and every count on both sides would
+#   be wrong without looking wrong. Normalised at the door, same argument as
+#   `filled_at` being forced to Eastern.
+TRADE_TYPES = ('ripster', 'scalp', 'swing')
+
+# The date the owner started choosing a type by hand. Everything filled BEFORE
+# this is `ripster` by his blanket ruling of 2026-09-30; everything on or after
+# it he grades and types himself. It happens to fall exactly on the graded /
+# ungraded boundary in the live journal (386 graded before, 28 ungraded after),
+# which is why the backfill can be stated as a date rather than a list of ids.
+TRADE_TYPE_BLANKET_BEFORE = '2026-09-28'
+
+
+def normalize_trade_type(value):
+    """'' / None -> None; anything else -> a member of TRADE_TYPES, or raise."""
+    if value is None:
+        return None
+    v = str(value).strip().lower()
+    if not v:
+        return None
+    if v not in TRADE_TYPES:
+        raise ValueError(
+            f'trade_type must be one of {TRADE_TYPES} (or blank), got {value!r}')
+    return v
 
 
 # ─── RECORD CONSTRUCTION ───────────────────────────────────────────────────────
@@ -104,7 +152,7 @@ def new_id(prefix='f'):
 def make_record(*, ticker, side, qty, price, filled_at,
                 symbol=None, instrument=None, source='manual',
                 conditions=None, grade=None, tags_good=None, tags_bad=None,
-                note='', signal_id=None, meta=None):
+                note='', signal_id=None, meta=None, trade_type=None):
     """Build one fill record. Does not write it — see append().
 
     filled_at accepts a datetime or an ISO string. qty is always positive;
@@ -119,6 +167,14 @@ def make_record(*, ticker, side, qty, price, filled_at,
         raise ValueError(f'qty must be positive, got {qty!r}')
     if price is None or price < 0:
         raise ValueError(f'price must be non-negative, got {price!r}')
+
+    conditions = dict(conditions or {})
+    tt = normalize_trade_type(
+        trade_type if trade_type is not None else conditions.get('trade_type'))
+    if tt is None:
+        conditions.pop('trade_type', None)
+    else:
+        conditions['trade_type'] = tt
 
     filled_at = to_et(filled_at)
     if isinstance(filled_at, datetime):
@@ -143,7 +199,7 @@ def make_record(*, ticker, side, qty, price, filled_at,
         'multiplier': mult,
         'cash': round(float(qty) * float(price) * mult, 4),
         'filled_at': filled_at,
-        'conditions': dict(conditions or {}),
+        'conditions': conditions,
         'grade': grade,
         'tags_good': list(tags_good or []),
         'tags_bad': list(tags_bad or []),
@@ -416,7 +472,51 @@ def set_conditions(record_id, conditions):
         return None
     merged = dict(r.get('conditions') or {})
     merged.update(conditions or {})
+    # The one key with a closed vocabulary. Raise rather than drop: a typo the
+    # UI swallowed would read as "I never set it" and the row would sit in the
+    # untyped bucket looking like an honest omission.
+    tt = normalize_trade_type(merged.get('trade_type'))
+    if tt is None:
+        merged.pop('trade_type', None)
+    else:
+        merged['trade_type'] = tt
     return update(record_id, conditions=merged)
+
+
+def backfill_trade_type(value='ripster', before=TRADE_TYPE_BLANKET_BEFORE,
+                        overwrite=False, dry_run=True):
+    """Stamp a trade_type on every fill filled strictly BEFORE `before`.
+
+    The owner's ruling of 2026-09-30: everything he traded before he started
+    distinguishing scalps was the Ripster system, so it is one blanket write
+    rather than 386 hand edits. `before` is a date string compared against the
+    date part of filled_at -- half-open, so a fill ON that date is his to type.
+
+    Skips records that already carry a trade_type unless `overwrite`. Returns
+    a summary dict; writes nothing when dry_run.
+    """
+    value = normalize_trade_type(value)
+    if value is None:
+        raise ValueError('backfill needs a trade_type')
+    rows = read_all()
+    hit = 0
+    for r in rows:
+        if (r.get('filled_at') or '')[:10] >= before:
+            continue
+        conds = r.get('conditions')
+        if conds is None:
+            conds = r['conditions'] = {}
+        if conds.get('trade_type') and not overwrite:
+            continue
+        hit += 1
+        if not dry_run:
+            conds['trade_type'] = value
+    if not dry_run and hit:
+        _rewrite(rows)
+    return {'records': len(rows), 'stamped': hit, 'value': value,
+            'before': before, 'dry_run': dry_run,
+            'untouched_on_or_after': sum(
+                1 for r in rows if (r.get('filled_at') or '')[:10] >= before)}
 
 
 def purge(source=None, via=None, ungraded_only=False, dry_run=True):
@@ -481,6 +581,10 @@ def condition_values():
             if v in (None, ''):
                 continue
             seen.setdefault(k, set()).add(str(v))
+    # trade_type is the one closed vocabulary, so offer all of it whether or
+    # not it has been used yet -- otherwise the first scalp has to be typed
+    # blind against a datalist that only knows 'ripster'.
+    seen['trade_type'] = set(TRADE_TYPES)
     return {k: sorted(v) for k, v in seen.items() if v}
 
 
@@ -496,6 +600,87 @@ def stats():
     }
 
 
+def selftest():
+    """Covers the trade_type vocabulary only. Reads the live journal but never
+    writes it -- the backfill is exercised with dry_run=True."""
+    fails = []
+
+    def ck(label, cond, got=None):
+        if cond:
+            print(f'  ok   {label}')
+        else:
+            fails.append(label)
+            print(f'  FAIL {label}' + (f'   got {got!r}' if got is not None else ''))
+
+    def raises(fn, *a, **k):
+        try:
+            fn(*a, **k)
+        except ValueError:
+            return True
+        return False
+
+    print('normalize_trade_type')
+    ck('blank is None, not a value', normalize_trade_type('') is None)
+    ck('None is None', normalize_trade_type(None) is None)
+    ck('whitespace-only is None', normalize_trade_type('   ') is None)
+    ck('case and padding are normalised',
+       normalize_trade_type('  Scalp ') == 'scalp')
+    ck('a near-miss RAISES rather than being dropped',
+       raises(normalize_trade_type, 'scalping'))
+    ck('an unrelated string raises', raises(normalize_trade_type, 'ripsterish'))
+    ck('every member of the vocabulary survives a round trip',
+       all(normalize_trade_type(t) == t for t in TRADE_TYPES))
+
+    print('make_record')
+    base = dict(ticker='spy', side='buy', qty=1, price=1.0,
+                filled_at='2026-09-30T10:00:00')
+    ck('the kwarg lands in conditions',
+       make_record(trade_type='SCALP', **base)['conditions']['trade_type'] == 'scalp')
+    ck('a value passed inside conditions is normalised too',
+       make_record(conditions={'trade_type': ' Swing'}, **base)
+       ['conditions']['trade_type'] == 'swing')
+    ck('the kwarg wins over the conditions dict',
+       make_record(trade_type='scalp', conditions={'trade_type': 'swing'}, **base)
+       ['conditions']['trade_type'] == 'scalp')
+    ck('absent means absent -- no empty key left behind',
+       'trade_type' not in make_record(**base)['conditions'])
+    ck('a blank does not create the key',
+       'trade_type' not in make_record(trade_type='', **base)['conditions'])
+    ck('a bad type refuses to build a record at all',
+       raises(make_record, trade_type='daytrade', **base))
+    ck('other conditions are untouched',
+       make_record(conditions={'srp': 'Mixed'}, trade_type='scalp', **base)
+       ['conditions'] == {'srp': 'Mixed', 'trade_type': 'scalp'})
+
+    print('vocabulary offered to the UI')
+    ck('trade_type is a condition key', 'trade_type' in CONDITION_KEYS)
+    ck('it is first, because it governs how the rest are read',
+       CONDITION_KEYS[0] == 'trade_type')
+    ck('all three are offered whether or not they have been used',
+       sorted(condition_values()['trade_type']) == sorted(TRADE_TYPES))
+
+    print('backfill (dry run against the live book)')
+    dry = backfill_trade_type(dry_run=True)
+    ck('is idempotent -- nothing left to stamp', dry['stamped'] == 0,
+       dry['stamped'])
+    ck('the boundary is half-open, so fills ON the date are his',
+       all((r.get('filled_at') or '')[:10] < TRADE_TYPE_BLANKET_BEFORE
+           for r in read_all()
+           if (r.get('conditions') or {}).get('trade_type') == 'ripster'))
+    ck('it refuses a type outside the vocabulary',
+       raises(backfill_trade_type, value='ripsters', dry_run=True))
+
+    print()
+    if fails:
+        print(f'SELFTEST FAILED -- {len(fails)} of the above')
+    else:
+        print('SELFTEST PASSED')
+    return not fails
+
+
 if __name__ == '__main__':
+    import sys
+    if '--selftest' in sys.argv:
+        sys.exit(0 if selftest() else 1)
     import pprint
     pprint.pprint(stats())

@@ -322,9 +322,12 @@ lost. A chop environment produces small losses *and* small wins, so it moves
 the variance and not the mean. Meanwhile A1 shows the curl was *better* inside
 chop than outside it.
 
-So: 3 credits of 25 (12%) go to momentum-and-chop combined, they are graded
-because the owner wants them visible and named in his own words, and **chop
-alone is not a disqualifier**. Only the *conjunction* of low momentum and chop
+So — **as originally written** — 3 credits of 25 (12%) go to
+momentum-and-chop combined, they are graded because the owner wants them
+visible and named in his own words, and **chop alone is not a disqualifier**.
+*(He ruled these up to 7 of 29 on 2026-09-30 and the paragraph below is the
+case he overruled; §9.1 carries the ruling and why I think he was right. The
+no-chop-alone-cap half of it stands, unchanged.)* Only the *conjunction* of low momentum and chop
 caps anything (§5), and that conjunction is the owner's `No Environment`, which
 his own grading punishes hard (mean grade **0.60**). Giving these tags credit
 proportional to how often he writes them would be giving 20%+ of the scale to a
@@ -389,7 +392,7 @@ the transcript every time, with a visible credit*, not *heavily weighted*.
 - The existing `signal_engine` opening-30-minute pace gate is a *gate*, not a
   read, and `screener.rel_volume()` is one bar against twenty. Neither is a
   continuous read. Sibling supplies one; until it does, E2 is N/A, which costs
-  1 credit of 25 and changes nothing.
+  1 credit of 29 and changes nothing.
 
 ---
 
@@ -408,8 +411,8 @@ CREDIT = {
     # C — the session
     'gate_3450':        2,
     'cloud_support':    2,
-    'momentum':         2,
-    'chop':             1,
+    'momentum':         4,    # RULED UP 2026-09-30, see §9.1
+    'chop':             3,    # RULED UP 2026-09-30, see §9.1
     # D — the next few days
     'mtf_1h':           1,
     'mtf_1d':           1,
@@ -417,10 +420,15 @@ CREDIT = {
     'atr_structure':    1,
     'volume':           1,
 }
-TOTAL_CREDITS = 25        # asserted at import
+TOTAL_CREDITS = 29        # asserted at import
 ```
 
-Group sums: A 6, B 8, C 7, D 2, E 2 → **25**.
+Group sums: A 6, B 8, C 11, D 2, E 2 → **29**.
+
+**This is the ripster table.** It is the base; a trade type supplies an
+override map and inherits everything it does not mention — see
+`design/09 §3.1`. A `scalp` sets `momentum` and `chop` to N/A and therefore
+attempts 22.
 
 Structure (B) is the heaviest group. That is deliberate and it is the one place
 the rubric departs from pure timeframe reasoning: levels are timeframe-agnostic
@@ -502,7 +510,7 @@ GPA  =  ──────────────────────
             Σ credit_i             over the same conditions
 ```
 
-With every condition attempted: denominator 25, maximum numerator 100, so the
+With every condition attempted: denominator 29, maximum numerator 116, so the
 scale is 0.0–4.0 by construction and needs no normalisation constant, no
 clamping, and no rescaling when a condition is added. **Adding a 17th condition
 later changes the denominator and nothing else.** That property is why this
@@ -522,15 +530,20 @@ all seven.
 | level_confluence (2 levels) | 1 | 2 | 2 |
 | gate_3450 (with) | 2 | 4 | 8 |
 | cloud_support (0.4 ATR behind) | 2 | 4 | 8 |
-| momentum (moderate) | 2 | 2 | 4 |
-| chop (mixed) | 1 | 2 | 2 |
+| momentum (moderate) | 4 | 2 | 8 |
+| chop (mixed) | 3 | 2 | 6 |
 | mtf_1h (with) | 1 | 4 | 4 |
 | mtf_1d (against) | 1 | 0 | 0 |
 | atr_structure (ample) | 1 | 4 | 4 |
 | volume (normal) | 1 | 2 | 2 |
-| **total** | **25** | | **86** |
+| **total** | **29** | | **94** |
 
-`gpa_raw = 86 / 25 = 3.44` → **displayed 3**.
+`gpa_raw = 94 / 29 = 3.24` → **displayed 3**.
+
+The same transcript typed as a **scalp** drops `momentum` and `chop` to N/A:
+`80 / 22 = 3.64` → still **displayed 3**, because the 3.75 bar holds. Typing a
+trade a scalp does not hand it a 4; it stops charging it for an hour it was
+never going to be in. (`design/09 §3.2`.)
 
 That is the right answer and it demonstrates the scale is not generous: price
 at a premarket level with a curl, the gate onside, room ahead, the hour
@@ -543,20 +556,34 @@ the word.
 
 ```python
 def round_gpa(raw: float) -> int:
-    """0-4 in 1.0 increments. Half-up below the top, with a raised bar for a 4."""
+    """0-4 in 1.0 increments. The owner's .60 bar, and 3.75 for a 4."""
     if raw >= 3.75:
         return 4
-    return min(3, int(math.floor(raw + 0.5)))
+    return min(3, int(math.floor(raw + 0.40)))
 ```
 
-Half-up everywhere except the top of the scale, where 3.75 is required rather
-than 3.50. Plain half-up would turn every 3.5 into a 4.0, and on the 25-credit
-table a 3.5 is reachable while failing three or four conditions outright. The
-3.75 bar keeps 4.0 meaning what the owner's 11 records meant.
+**RULED 2026-09-30.** Not half-up: **.60 or more rounds up, below it rounds
+down** — the same bar `pairing.round_grade` already applies to his exit grades,
+so the two scores in this system round by one rule rather than two. The 3.75
+requirement for a 4 sits on top of it and is stricter still.
 
-**The stored value keeps the unrounded composite. Recommended, and it is not a
-compromise on the owner's "1.0 increments" — the increments are a display and
-comparison rule, not a storage rule.** Three reasons:
+His reasoning, and it is the point of the whole instrument:
+
+> *"A pretty good trade at 3.48 GPA could be argued into a 4.0, but then it
+> would undermine the point of scoring and improving trading, which is to get
+> consistently good setups. Making the thresholds higher will ultimately raise
+> my trading acumen."*
+
+So 3.48 is a 3, and so is 3.60. On the 29-credit table a 3.75 means losing at
+most 2 credits out of 29 — a 4.0 is a setup with essentially nothing wrong with
+it, which is what he is asking for.
+
+**RULED 2026-09-30: the integer is the score of record.** The unrounded
+composite is still persisted as `gpa_raw`, never displayed, and exists only for
+the two machine uses below. This was flagged to him explicitly as
+implementation rather than a softening of his ruling; if he wants the decimal
+gone from the file too, it goes, at the cost of reason 1. Three reasons it is
+kept:
 
 1. **Ranking.** `screener.rank()` sorts 40 tickers into 5 slots. On a 5-bucket
    scale a normal morning puts a dozen tickers on 2 and the tie-break falls
@@ -597,7 +624,7 @@ correct behaviour and it is free.
 
 ### Worked example — pre-open, sibling module not yet landed
 
-`curl_512`, `momentum`, `chop`, `atr_structure`, `volume` all N/A (8 credits
+`curl_512`, `momentum`, `chop`, `atr_structure`, `volume` all N/A (12 credits
 gone). Of the remaining 17 credits, suppose `room_ahead` scores 2 and
 `level_confluence` 2, everything else 4:
 
@@ -635,7 +662,7 @@ nearest one, which is the truth.
 MIN_CREDITS_FOR_GPA = 13
 ```
 
-Below 13 of 25 attempted credits, `gpa` and `gpa_raw` are **`None`** and
+Below 13 of 29 attempted credits, `gpa` and `gpa_raw` are **`None`** and
 `incomplete` is `True`. Never `0` — a 0.0 is a verdict and a `None` is an
 absence, and conflating them is how "no data" becomes "bad setup" on a board.
 
@@ -721,11 +748,13 @@ sentence of why, and whether it is measured or judged.
   'letter': 'B',                         # or None
 
   'credits_attempted': 25,
-  'credits_possible': 25,                # == TOTAL_CREDITS, so the UI can show 25/25
-  'points_earned': 86,                   # Σ points*credit
-  'points_possible': 100,                # 4 * credits_attempted
+  'credits_possible': 29,                # == TOTAL_CREDITS for this trade_type
+  'points_earned': 94,                   # Σ points*credit
+  'points_possible': 116,                # 4 * credits_attempted
+  'trade_type': 'ripster',               # which table was applied -- design/09
+  'trade_type_assumed': False,           # True when the record carried none
   'incomplete': False,
-  'incomplete_why': None,                # e.g. 'only 9 of 25 credits measurable'
+  'incomplete_why': None,                # e.g. 'only 9 of 29 credits measurable'
 
   'caps': [                              # every cap that fired, lowest first; [] is normal
     {'id': 'inside_gate', 'label': 'Price inside the 34/50 cloud',
@@ -787,8 +816,10 @@ sentence of why, and whether it is measured or judged.
 
 1. `conditions` always has all 16 rows in the same order, every call. N/A rows
    are present with `na: True`, `points: None`. A missing condition must be
-   *visible* — the owner needs to see that the GPA was computed on 17 of 25
-   credits, not silently get a number.
+   *visible* — the owner needs to see that the GPA was computed on 17 of 29
+   credits, not silently get a number. The same applies to `trade_type`: a
+   scalp is graded on 22 credits by design (`design/09 §3.1`) and the
+   transcript must say so, or an N/A will read as missing data.
 2. `share` sums to 1.0 across non-N/A rows. It is the width of the bar.
 3. `Σ weighted == points_earned` and `4 × credits_attempted == points_possible`.
    Both are assertions in `composite()`.
@@ -919,7 +950,7 @@ than after both modules exist:**
 
 **The item most likely to need negotiation:** `mtf['*']['pos']` must be *price
 versus the cloud*, with a real `inside`. See §Group D. If the sibling can only
-deliver the EMA-pair direction, say so and D1/D2 stay N/A — 2 credits of 25.
+deliver the EMA-pair direction, say so and D1/D2 stay N/A — 2 credits of 29.
 
 ---
 
@@ -1066,6 +1097,29 @@ and does `cloud_support` — the one condition I invented — contribute anythin
 ## 9. FLAGS: WHERE I THINK THE STATED PREFERENCE WILL PRODUCE A BAD RESULT
 
 ### 9.1 Momentum and chop, weighted by how often they are complained about
+
+> **RULED 2026-09-30 — overruled, and I now think correctly.** `momentum` 4 and
+> `chop` 3 of 29, so both present on an otherwise-clean setup reads
+> `4 × 22/29 = 3.03`, which is his stated *"basically take away 1 point from the
+> 4.0 score"*; one present costs about half that. The flag below argued from
+> P/L, and he was not making a P/L claim — his words were *"those two conditions
+> are more incidental than causal."* He is grading the **environment**, and a
+> choppy tape is definitionally not a grade-A environment however well he
+> happened to trade it. §0 already says this instrument grades environment and
+> never execution, and *"notes and actual P/L will speak for itself."* The
+> objection below applied a P/L test to a non-P/L instrument.
+>
+> **What survives of the flag, and he has been told it:** §8.2's acceptance bar
+> is scored on P/L ordering, so it will now probably show this GPA doing *worse*
+> than counting aligned clouds. That is the predicted consequence of the ruling,
+> not a defect to go hunting for later. If §8.2 is meant to referee a rubric
+> that is explicitly not predicting P/L, §8.2 is the thing mis-specified.
+>
+> **And the exemption he attached**, which is the part that makes it right:
+> *"if it's a quick exit with low momentum, it's not really counted against the
+> trade."* Both go N/A for a `scalp` — `design/09 §3.2`.
+
+The flag as originally raised, kept because the evidence in it is still true:
 The strongest flag in this document. 311 tag instances across the two, and
 **zero measured P/L separation** (`Low Momentum` +$3.68 noise, `Choppy` −$0.18
 noise); trades tagged low-momentum made *more* than untagged ones; both tags
@@ -1079,6 +1133,15 @@ the best-performing state in his own book, and §8.2 will show it doing worse
 than counting clouds on your fingers.
 
 ### 9.2 Psych levels as "especially important"
+
+> **RULED 2026-09-30 — granted, through the mechanism the flag asked for.** He
+> wants psych *"weighted with strong importance, especially on stocks where ATR
+> is within 1 day or less of the level, and especially at levels which are 10s,
+> 50s, or 100s, relative to stock price."* Both qualifiers are the answer to the
+> objection below: they make the psych grid **sparse** rather than promoting a
+> grid that floods. A tiered, 1-ATR-gated psych level can still leave
+> `level_in_reach` at 0, so the `no_setup` cap survives intact. Spec in §9.2.1.
+
 `screener.LEVEL_QUALITY` puts psych last at 0.40 and that judgement is sound:
 `levels.psych_levels()` generates *every* round number within 2 ATR, which on a
 $60 stock is a $5 grid — four or five "levels" always in reach. Promote psych to
@@ -1093,9 +1156,103 @@ instruction is honoured through the mechanism that makes it true rather than by
 inflating a table.
 
 ### 9.3 "1.0 increments" as the stored value
+
+> **RULED 2026-09-30 — the integer is the score of record, and the bar goes up.**
+> Rounding adopts his own `.60` journal rule with 3.75 still required for a 4
+> (§3). `gpa_raw` survives as machinery only — never displayed, only sorting and
+> §8.2 — and he was told plainly that this is implementation, not a softening.
+> His reason for wanting it coarse is the strongest argument in this section:
+> *"making the thresholds higher will ultimately raise my trading acumen and
+> create a more robust program."* A score that can be argued upward is not a
+> score.
+
 Store the raw composite, display the integer (§3). Increments are a reading
 rule. Storing only the integer costs board ordering, costs §8.2 outright, and
 makes intraday deterioration invisible.
+
+### 9.2.1 Psych tiering — the spec the ruling produces
+
+Two new ideas, both cheap, both in `levels.py` where the psych grid already
+lives.
+
+**1. A tier, from the round-number magnitude the value satisfies.**
+`levels.psych_step(price)` already scales the grid to the instrument ($5 on a
+$66 name, $25 on a $660 one). A tier asks a second question of each emitted
+level: what is the *largest* increment on the 1-5-10-50-100 ladder that divides
+it, relative to that base step?
+
+```python
+# His three classes, and only his three. NOT a generic decade ladder -- an
+# early draft used one and made $75 outrank $70 on a $66 stock, because 75 is
+# a multiple of 25. There is nothing psychological about $75.
+PSYCH_CLASSES = (10.0, 50.0, 100.0)
+
+def psych_tier(value, price):
+    """How many of the 10/50/100 classes this level satisfies.
+
+    Only classes LARGER than the instrument's own grid step count -- that is
+    the "relative to stock price" in his instruction. On a $2,000 name the step
+    is already $50, so being a multiple of 50 says nothing and only the 100s
+    separate; on a $66 name the step is $5 and all three classes discriminate.
+    """
+    base = psych_step(price)
+    return sum(1 for c in PSYCH_CLASSES
+               if c > base and abs(value / c - round(value / c)) < 1e-9)
+```
+
+His own worked case, reproduced exactly. A **$66 stock** has `psych_step` $5, so
+the grid is 55 / 60 / 65 / 70 / 75 and all three classes are in play:
+
+| level | classes satisfied | tier | distance | vs $5 ATR |
+|---|---|---|---|---|
+| $65 | — | 0 — base | $1 | 0.2 ATR |
+| **$70** | **10** | **1** | **$4** | **0.8 ATR** |
+| $60 | 10 | 1 | $6 | 1.2 ATR |
+| $75 | — | 0 — base | $9 | 1.8 ATR |
+| $50 | 10, 50 | 2 | $16 | 3.2 ATR |
+
+And a **$660 stock**, `psych_step` $25, where only 50 and 100 can discriminate:
+$650 → tier 1, $700 → tier 2, $675 → tier 0.
+
+*"A ~$66 stock with ATR $5 would have strong psych level at $70 and a less
+strong one at $60."* $70 and $60 are the same tier and separate on the second
+rule, which is the one he gave first.
+
+**2. The one-ATR gate.** *"Especially on stocks where ATR is within 1 day or
+less of the level."* A psych level is only top-quality within **1.0 daily ATR**
+of price; beyond that its tier is capped. This is what keeps the promotion from
+flooding: on the $66 name exactly one level ($70) clears both tests, where
+`psych_levels(span_atr=2.0)` emits seven.
+
+**Where it lands in the rubric.** `B2 level_quality`'s `LEVEL_CREDIT` gains a
+tiered psych row rather than a single 2:
+
+```python
+'psych':       2,          # tier 0, or anything beyond 1.0 daily ATR
+'psych_tier1': 3,          # a 10, within 1.0 daily ATR -- prior_day's rank
+'psych_tier2': 4,          # tier 2+ within 1.0 daily ATR -- premarket's rank
+```
+
+Capped at 4 because 4 is the top of the scale; a $100 line on a $103 stock is
+as good a level as a hand-typed one, which is the claim he is making.
+
+**What is NOT changed, and why the §9.2 objection is answered rather than
+overridden.** `B1 level_in_reach` still filters on distance alone and can still
+score 0, because tiering changes a level's *quality*, never its *existence*. The
+`no_setup` cap is untouched. `screener.LEVEL_QUALITY` is likewise untouched —
+`grading.py` carries its own table, per B2.
+
+**The cloud caveat is already structural.** *"Would also need to take into
+account how the price is relative to EMA/MTF clouds."* B1 already filters levels
+to the side `direction` is heading toward, and `direction` is set by the cloud
+stack — so a psych level behind the trade never becomes the B1 level and never
+gets graded at all. No new mechanism needed; worth stating because he asked for
+it and it would otherwise look ignored.
+
+**Cost:** `levels.psych_levels()` must return dicts or tuples carrying the tier
+rather than bare floats, or callers must re-derive it. Board row for this is
+`t-level-set`'s neighbour; `levels.py` has no selftest today, and this is
+arithmetic that deserves one.
 
 ### 9.4 Environment-only, and the bullish asymmetry
 `Bias: bullish` +$14.07 (strong, n=114) against `Bias: bearish` −$17.27
