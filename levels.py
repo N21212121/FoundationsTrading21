@@ -103,6 +103,42 @@ def psych_step(price):
     return 50.0
 
 
+# Nate's three classes, 2026-09-30, and ONLY his three. He asked for psych
+# levels "weighted with strong importance... especially at levels which are
+# 10s, 50s, or 100s, relative to stock price."
+#
+# NOT A GENERIC DECADE LADDER. A first draft used one and made $75 outrank $70
+# on a $66 stock, because 75 is a multiple of 25. There is nothing
+# psychological about $75.
+PSYCH_CLASSES = (10.0, 50.0, 100.0)
+
+
+def psych_tier(value, price):
+    """How many of the 10/50/100 classes a round number satisfies. 0-3.
+
+    Only classes LARGER than this instrument's own grid step count, and that
+    is the "relative to stock price" in the instruction. On a $2,000 name
+    psych_step is already $50, so being a multiple of 50 says nothing about a
+    level and only the 100s separate; on a $66 name the step is $5 and all
+    three classes discriminate.
+
+    Nate's worked case, a $66 stock (step $5):
+        $65 -> 0 (base grid)    $70 -> 1 (a ten)
+        $60 -> 1 (a ten)        $50 -> 2 (a ten and a fifty)
+        $75 -> 0 -- see PSYCH_CLASSES
+
+    This reports a FACT about the number. Whether a tier earns credit also
+    depends on distance, and that judgement belongs to grading.py's B2
+    (design/01 §9.2.1), not here.
+    """
+    v, p = _f(value), _f(price)
+    if v is None or p is None or v <= 0:
+        return 0
+    base = psych_step(p)
+    return sum(1 for c in PSYCH_CLASSES
+               if c > base and abs(v / c - round(v / c)) < 1e-9)
+
+
 def psych_levels(price, span_atr=2.0, atr_value=None):
     """Round numbers within reach of price."""
     if price is None:
@@ -260,11 +296,14 @@ def build(daily_bars, price, manual=None, atr_value=None,
 
     out = []
 
-    def add(name, kind, value):
+    def add(name, kind, value, tier=None):
         v = _f(value)
         if v is None or v <= 0:
             return
-        out.append({'name': name, 'kind': kind, 'price': round(v, 4)})
+        # tier is the psych magnitude class (psych_tier); None on every other
+        # kind, and present on all of them so a consumer never has to .get().
+        out.append({'name': name, 'kind': kind, 'price': round(v, 4),
+                    'tier': tier})
 
     for label, prices in (manual or {}).items():
         key = f'manual_{label}'
@@ -299,7 +338,7 @@ def build(daily_bars, price, manual=None, atr_value=None,
 
     if include_psych and price:
         for v in psych_levels(price, psych_span_atr, a):
-            add('psych', 'psych', v)
+            add('psych', 'psych', v, tier=psych_tier(v, price))
 
     # Distances last, once every level is in hand.
     for lv in out:
@@ -364,3 +403,85 @@ def confluence(level_set, band_atr=0.15):
         'count': len(g),
         'distance_atr': round(min(l['distance_atr'] for l in g), 3),
     } for g in groups]
+
+
+# ─── SELFTEST ──────────────────────────────────────────────────────────────────
+
+def selftest():
+    """Covers psych_step / psych_tier and the tier's arrival in build().
+
+    This file had no selftest before 2026-09-30. It gained one because
+    psych_tier is arithmetic that decides GPA credit (design/01 §9.2.1), and
+    the first draft of it was wrong in a way that only a worked case caught.
+    """
+    fails = []
+
+    def ck(label, cond, got=None):
+        if cond:
+            print(f'  ok   {label}')
+        else:
+            fails.append(label)
+            print(f'  FAIL {label}' + (f'   got {got!r}' if got is not None else ''))
+
+    print('psych_step scales with the instrument')
+    ck('a $17 name coils on whole dollars', psych_step(17) == 1.0)
+    ck('a $66 name coils on fives', psych_step(66) == 5.0)
+    ck('a $660 name coils on twenty-fives', psych_step(660) == 25.0)
+    ck('a $1,870 name coils on fifties', psych_step(1870) == 50.0)
+
+    print("psych_tier -- Nate's worked case, a $66 stock")
+    ck('$65 is base grid', psych_tier(65, 66) == 0, psych_tier(65, 66))
+    ck('$70 is a ten', psych_tier(70, 66) == 1, psych_tier(70, 66))
+    ck('$60 is a ten', psych_tier(60, 66) == 1, psych_tier(60, 66))
+    ck('$50 is a ten AND a fifty', psych_tier(50, 66) == 2, psych_tier(50, 66))
+    ck('$100 is all three', psych_tier(100, 66) == 3, psych_tier(100, 66))
+    ck('$75 is NOT promoted -- 25 is not one of the classes',
+       psych_tier(75, 66) == 0, psych_tier(75, 66))
+    ck('$55 is base grid', psych_tier(55, 66) == 0, psych_tier(55, 66))
+
+    print('psych_tier is relative to the price, not absolute')
+    ck('on a $660 name a fifty still separates', psych_tier(650, 660) == 1)
+    ck('on a $660 name a hundred outranks it', psych_tier(700, 660) == 2)
+    ck('on a $660 name the base grid is flat', psych_tier(675, 660) == 0)
+    ck('on a $2,000 name only hundreds separate, because the step IS fifty',
+       (psych_tier(2000, 2000), psych_tier(2050, 2000)) == (1, 0),
+       (psych_tier(2000, 2000), psych_tier(2050, 2000)))
+    ck('the same $70 means nothing on a $2,000 name',
+       psych_tier(70, 2000) == 0, psych_tier(70, 2000))
+
+    print('psych_tier refuses to guess')
+    ck('no price -> 0', psych_tier(70, None) == 0)
+    ck('no value -> 0', psych_tier(None, 66) == 0)
+    ck('a non-positive level -> 0', psych_tier(0, 66) == 0)
+
+    print('build() carries the tier out')
+    ls = build([], 66.0, atr_value=5.0)
+    psych = {l['price']: l['tier'] for l in ls['levels'] if l['kind'] == 'psych'}
+    ck('the $70 level arrives tiered', psych.get(70.0) == 1, psych)
+    ck('the $65 level arrives untiered', psych.get(65.0) == 0, psych)
+    ck('every level dict has the key, so no consumer needs .get()',
+       all('tier' in l for l in ls['levels']))
+    ck('a non-psych level carries None, not 0',
+       all(l['tier'] is None for l in build([], 66.0, atr_value=5.0,
+                                           manual={'support': [64.13]})['levels']
+           if l['kind'] != 'psych'))
+
+    print('the distance half of the B2 rule is levels\u0027 job to REPORT only')
+    ls = build([], 66.0, atr_value=5.0)
+    by = {l['price']: l['distance_atr'] for l in ls['levels'] if l['kind'] == 'psych'}
+    ck('$70 is inside one daily ATR', by.get(70.0) is not None and by[70.0] <= 1.0,
+       by.get(70.0))
+    ck('$60 is outside it, which is what separates them in his example',
+       by.get(60.0) is not None and by[60.0] > 1.0, by.get(60.0))
+
+    print()
+    if fails:
+        print(f'SELFTEST FAILED -- {len(fails)} of the above')
+    else:
+        print('SELFTEST PASSED')
+    return not fails
+
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(0 if selftest() else 1)
