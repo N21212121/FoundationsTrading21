@@ -435,14 +435,6 @@ def make_bp(alpaca):
         return jsonify({'ok': True, 'applied': 'custom', 'total': total,
                         'weights': SVC.set_weights(vals)})
 
-    @bp.route('/api/screen/calibrate')
-    def screen_calibrate():
-        """Suggested weights from journal trades matched to screener
-        readings. Read-only: nothing is applied until the user saves."""
-        import screen_history as SH
-        return jsonify({'ok': True,
-                        **SH.calibrate(SVC.settings()['weights'])})
-
     @bp.route('/api/screen/levels/<ticker>')
     def screen_levels(ticker):
         """Every level for one ticker, for the detail panel."""

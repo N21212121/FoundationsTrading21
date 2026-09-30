@@ -1361,10 +1361,6 @@
         <button onclick="scrWEven()">Even split</button>
       </div>
       <div id="scrWMsg" style="font-size:12px;margin-top:8px;color:var(--text-dim);"></div>
-      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
-        <b style="font-size:12px;">Calibrate from journal</b>
-        <div id="scrCal" style="font-size:11px;color:var(--text-dim);margin-top:5px;"></div>
-      </div>
     </div>
   </div>
 </div>
@@ -4322,40 +4318,8 @@ async function scrWeightsOpen() {
     SCRW.weights = r.weights; SCRW.defaults = r.defaults;
     scrWRender();
   } catch (e) { $('scrWeights').textContent = 'Failed: ' + e; }
-  scrCalLoad();
 }
 
-// Suggestions only fill the boxes; nothing changes until Save.
-async function scrCalLoad() {
-  const box = $('scrCal');
-  box.textContent = 'Checking…';
-  try {
-    const r = await fetch('/api/screen/calibrate').then(x => x.json());
-    SCRW.cal = r;
-    const rs = Object.entries(r.components || {}).map(([k, v]) =>
-      `${SCR_COMP_LABEL[k]} ${v.r == null ? '&mdash;' : (v.r >= 0 ? '+' : '') + v.r.toFixed(2)}`)
-      .join(' &middot; ');
-    if (!r.ready) {
-      box.innerHTML = `${r.matched} of ${r.min_trades} trades matched so far. The screener
-        now records what it sees on every scan; each trade you take on a screened ticker
-        within ${r.window_min} min of a reading, in the same direction, counts toward this.
-        Journal edge is already measured from your trades and isn't part of the fit.`;
-      return;
-    }
-    box.innerHTML = `${r.matched} trades matched. How each component tracked P/L
-      (correlation): ${rs}.` + (r.suggested
-        ? `<div style="margin-top:6px;"><button onclick="scrCalApply()">Use suggested weights</button>
-           <span style="margin-left:6px;">fills the boxes; press Save to apply.</span></div>`
-        : `<div style="margin-top:6px;">${r.note || ''}</div>`);
-  } catch (e) { box.textContent = 'Failed: ' + e; }
-}
-
-function scrCalApply() {
-  if (!SCRW.cal || !SCRW.cal.suggested) return;
-  const w = scrWToWhole(SCRW.cal.suggested);
-  Object.keys(w).forEach(k => { if ($('sw_' + k)) $('sw_' + k).value = w[k]; });
-  scrWTotal();
-}
 function scrWClose(){ $('scrWModal').style.display='none'; }
 function scrWBackdrop(e){ if (e.target.id==='scrWModal') scrWClose(); }
 

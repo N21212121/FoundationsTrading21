@@ -38,7 +38,6 @@ HISTORY_DIR = os.path.join(cm.DATA_DIR, 'screen_history')
 
 RECORD_EVERY_MIN = 6       # one reading per ticker per closed 6-minute bar
 MATCH_WINDOW_MIN = 10      # a reading older than this says nothing about a fill
-MIN_TRADES = 30            # below this, calibration only reports progress
 
 _lock = threading.Lock()
 _last = {}                 # ticker -> (datetime, state) of the last kept reading
@@ -111,19 +110,6 @@ def read_all():
     return by
 
 
-def _pearson(xs, ys):
-    n = len(xs)
-    if n < 3:
-        return None
-    mx, my = sum(xs) / n, sum(ys) / n
-    sxx = sum((x - mx) ** 2 for x in xs)
-    syy = sum((y - my) ** 2 for y in ys)
-    if sxx <= 0 or syy <= 0:
-        return None           # a component that never varied says nothing
-    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
-    return sxy / math.sqrt(sxx * syy)
-
-
 def match_trades(legs=None, readings=None, window_min=MATCH_WINDOW_MIN):
     """Pair each closed trade with the screener's last reading before entry.
 
@@ -154,44 +140,4 @@ def match_trades(legs=None, readings=None, window_min=MATCH_WINDOW_MIN):
         if r.get('direction') != want:
             continue
         out.append({'leg': l, 'reading': r})
-    return out
-
-
-def calibrate(current_weights, min_trades=MIN_TRADES):
-    """Suggest weights from how each component related to trade P/L.
-
-    For every component, the correlation between its value at entry and the
-    trade's P/L. Components that tracked P/L upward share the weight in
-    proportion to that correlation; those that did not get zero.
-
-    'edge' is left at its current weight and excluded from the fit. Its
-    value is computed FROM the journal's P/L, so correlating it against that
-    same P/L would reward it for agreeing with itself.
-    """
-    import screener as SC
-    pairs = match_trades()
-    comps = [k for k in SC.COMPONENTS if k != 'edge']
-    stats = {}
-    for k in comps:
-        xs = [p['reading']['components'].get(k, 0.0) or 0.0 for p in pairs]
-        ys = [p['leg']['pl'] for p in pairs]
-        r = _pearson(xs, ys)
-        stats[k] = {'r': round(r, 3) if r is not None else None}
-
-    out = {'matched': len(pairs), 'min_trades': min_trades,
-           'window_min': MATCH_WINDOW_MIN, 'components': stats,
-           'ready': len(pairs) >= min_trades, 'suggested': None}
-    if not out['ready']:
-        return out
-
-    edge_w = float((current_weights or {}).get('edge', 0) or 0)
-    pos = {k: max(stats[k]['r'] or 0.0, 0.0) for k in comps}
-    total = sum(pos.values())
-    if total <= 0:
-        out['note'] = 'No component tracked P/L upward; nothing to suggest.'
-        return out
-    rest = max(0.0, 1.0 - edge_w)
-    sug = {k: rest * pos[k] / total for k in comps}
-    sug['edge'] = edge_w
-    out['suggested'] = SC.normalize_weights(sug)
     return out
