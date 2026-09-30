@@ -101,9 +101,12 @@ supplies an override map; anything it does not mention it inherits.
 TYPE_CREDIT = {
     'ripster': {},                                  # the base table, unchanged
     'scalp':   {'momentum': None, 'chop': None},    # None == N/A, see below
-    'swing':   NotImplemented,                      # d-swing-credits, unruled
+    'swing':   {'curl_512': 1, 'mtf_1h': 2,         # ruled 2026-09-30, §3.3
+                'mtf_1d': 3, 'room_ahead': 3},
 }
 ```
+
+Attempted credits by type: **ripster 29, scalp 22, swing 31.**
 
 `None` means **N/A**, not zero — and this is the load-bearing detail.
 `design/01 §4` already says an N/A condition is a course not taken: it leaves
@@ -133,14 +136,40 @@ Arithmetic, with the new weights from §3.3 of this file's sibling ruling
 instead of 29, and a scalp that fails nothing else still reads 4.0 where a
 Ripster trade in the same tape would read 3.03.
 
-### 3.3 Swing is deliberately not specified
+### 3.3 Swing — ruled 2026-09-30
 
-Board row `d-swing-credits`. The shape I would propose — D rising from 1/1 to
-2/3 because a multi-day hold is governed by the daily cloud, A's `curl_512`
-falling from 3 to 1 because a 6-minute curl does not govern a three-day hold,
-momentum and chop staying where they are because a swing genuinely does suffer
-in a range — is a guess until he reads it. He named this type and gave no rules
-for it, and inventing a table is the thing `design/00` forbids.
+He took the proposal as offered: *"Choice A, your recommendation for now."*
+Four rows change, ten are inherited.
+
+| condition | ripster | swing | why |
+|---|---|---|---|
+| `curl_512` | 3 | **1** | a 6-minute curl does not govern a three-day hold |
+| `mtf_1h` | 1 | **2** | the hour starts to matter |
+| `mtf_1d` | 1 | **3** | the daily 20/21 cloud is what actually governs it |
+| `room_ahead` | 2 | **3** | a multi-day target needs more clear air than an intraday one |
+| `momentum` | 4 | 4 | unchanged — a swing genuinely does bleed in a range |
+| `chop` | 3 | 3 | unchanged, same reason |
+
+Total 31. **Momentum and chop staying put is the one choice here worth
+defending**, because it is the exact opposite of the scalp exemption: a scalp is
+out before a flat tape can cost it anything, and a swing sits in that tape for
+days. The same two conditions are N/A for one type and heavily weighted for
+another, which is the clearest evidence that the rubric needed a strategy axis
+at all rather than one table with apologies in it.
+
+**Group weights, per type.** Swing moves 4 credits from A (trigger) into D
+(higher timeframe) and B (structure). A falls from 6/29 to 4/31 and D rises from
+2/29 to 5/31 — so the group that *governs the next few bars* shrinks by more than
+half in relative terms and the group that *governs the next few days* more than
+doubles. That is the intended reading of the ruling and it is worth stating
+numerically, because the four row edits look small and the shift is not.
+
+**The "for now" in his ruling is load-bearing.** He accepted this table while
+saying the rubric will also need to flex by **market condition**, which is a
+second axis and a larger design. This table is not the finished answer; it is
+the one that unblocks `grading.py` today. Board row `t-cond-vocab` carries the
+vocabulary half of that, and the market-condition axis has no row yet because it
+has no design.
 
 ---
 
@@ -170,9 +199,10 @@ Built and verified:
 - `pairing.py --selftest` and `exit_ladder.py` still pass
 - **No frontend change was needed.** The editor renders `condition_keys`.
 
-Not built, and blocked on `grading.py` not existing at all:
+Ruled 2026-09-30, not yet built because `grading.py` does not exist at all:
 - `TYPE_CREDIT` and the per-type override resolution (§3.1)
-- The swing table (§3.3) — needs his ruling first
+- The swing table (§3.3) — **now specified**, so nothing in this file is
+  waiting on him. `t-grading` has no remaining blocker.
 
 ---
 

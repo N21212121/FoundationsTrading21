@@ -427,8 +427,18 @@ Group sums: A 6, B 8, C 11, D 2, E 2 → **29**.
 
 **This is the ripster table.** It is the base; a trade type supplies an
 override map and inherits everything it does not mention — see
-`design/09 §3.1`. A `scalp` sets `momentum` and `chop` to N/A and therefore
-attempts 22.
+`design/09 §3.1`. Attempted credits by type, all ruled 2026-09-30:
+
+| type | attempts | what moves |
+|---|---|---|
+| `ripster` | **29** | nothing — this table |
+| `scalp` | **22** | `momentum` and `chop` go N/A |
+| `swing` | **31** | `curl_512` 3→1, `room_ahead` 2→3, `mtf_1h` 1→2, `mtf_1d` 1→3 |
+
+Note what swing does to the group balance: A falls 6/29 → 4/31 and D rises
+2/29 → 5/31, so the group governing *the next few bars* more than halves in
+relative weight while the group governing *the next few days* more than
+doubles. Four small-looking row edits, one large shift.
 
 Structure (B) is the heaviest group. That is deliberate and it is the one place
 the rubric departs from pure timeframe reasoning: levels are timeframe-agnostic
