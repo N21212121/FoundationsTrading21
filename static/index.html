@@ -6008,7 +6008,7 @@ function stallNote(key, j) {
 }
 
 async function jobControl(kind, action) {
-  // kind: 'backtest' | 'screen' | 'assign'. Optimistic: the next poll tick
+  // kind: 'backtest' | 'universe' | 'assign'. Optimistic: the next poll tick
   // reflects the true state, so we don't touch the DOM here.
   try { await api(`/api/${kind}/control`, {action}); }
   catch (e) { /* a 409 just means the state moved under us; poll corrects it */ }
@@ -6807,7 +6807,7 @@ async function runScreen() {
   }
   if (!ou && $('scEngine').value) body.engine = $('scEngine').value;
   if (!body.start) { $('scStatus').textContent = 'start date required'; return; }
-  const r = await api('/api/screen', body);
+  const r = await api('/api/universe', body);
   if (r.error) { $('scStatus').textContent = `rejected: ${r.error}`; return; }
   $('scStatus').innerHTML = progressHTML({progress: {}}, 'names');
   $('scResults').innerHTML = '';
@@ -6818,7 +6818,7 @@ async function runScreen() {
 
 async function pollScreen() {
   let j;
-  try { j = await api('/api/screen'); } catch (e) { return; }
+  try { j = await api('/api/universe'); } catch (e) { return; }
 
   if (j.state === 'idle') {
     $('scStatus').innerHTML = '<div class="prog-text">no screen run yet</div>';
@@ -6835,7 +6835,7 @@ async function pollScreen() {
       `${p.ou_gate ? 'OU pipeline' : 'engine ' + p.engine}` +
       `${p.compound ? ' · compounded' : ''}${tag}</div>` +
       progressHTML(j, 'names', 'scr') +
-      jobControls('screen', j.state);
+      jobControls('universe', j.state);
     return;
   }
   if (_scrTimer) { clearInterval(_scrTimer); _scrTimer = null; }

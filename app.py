@@ -2110,15 +2110,30 @@ def _run_screen_job(params):
                         error=str(e))
 
 
-@app.route('/api/screen', methods=['GET', 'POST'])
+@app.route('/api/universe', methods=['GET', 'POST'])
 def screen_route():
-    """GET: current screen job + result table. POST: start a screen.
-    Body: {basket | symbols[] | sector (+subsector?), engine?, start, end?,
-    capital?, alloc_mode? ('pct'|'dollars'|'even'), alloc_value?,
+    """GET: current UNIVERSE screen job + result table. POST: start one.
+
+    RENAMED FROM /api/screen 2026-09-30, and it was a live bug rather than a
+    tidy-up. screener_routes registers its own GET /api/screen for the DAILY
+    board, the blueprint registers first so it won GET, and this handler's
+    payload never reached the poller -- `j.state` came back undefined, every
+    branch fell through, and the timer never cleared. It was invisible only
+    because the tab was hidden; unhiding it made it real within the hour.
+
+    Two different things were both called "screen": the daily Ripster board
+    (screener_routes + screener_service) and this, a historical run of one
+    engine across a universe. One name, two meanings, and the collision was
+    the bug. Now the universe job is /api/universe and the daily board keeps
+    /api/screen.
+
+    POST body: {basket | symbols[] | sector (+subsector?), engine?, start,
+    end?, capital?, alloc_mode? ('pct'|'dollars'|'even'), alloc_value?,
     ou_gate? (bool: half-life gate + per-name engine assignment; engine is
     ignored), compound? (bool: per-sleeve compounding), sharpe_weight?,
     slippage_bps?}. Legacy alloc_pct still accepted as mode 'pct'.
-    No source = the whole universe. One job at a time."""
+    No source = the whole universe. One job at a time.
+    """
     global _scr_job
     if request.method == 'GET':
         with _scr_lock:
@@ -2128,7 +2143,7 @@ def screen_route():
         return jsonify({'error': 'not connected'}), 400
     with _scr_lock:
         if _job_busy(_scr_job):
-            return jsonify({'error': 'screen already running',
+            return jsonify({'error': 'universe screen already running',
                             'params': _scr_job.get('params')}), 409
 
     body = request.json or {}
@@ -2215,7 +2230,7 @@ def screen_route():
                     'params': params})
 
 
-@app.route('/api/screen/control', methods=['POST'])
+@app.route('/api/universe/control', methods=['POST'])
 def screen_control():
     """{action: pause|resume|stop}. stop discards all work, gate included."""
     global _scr_job
