@@ -1084,11 +1084,15 @@
   <img id="topLogo" src="/static/Foundations_Trading.png" alt="">
   <h1>FOUNDATIONS</h1>
   <div class="tab active" id="tabDash" onclick="showTab('dash')">Dashboard</div>
-  <!-- Hidden while the app is built out Ripster-only. The tab (Baskets,
-       Backtester, Universe Screener, Engine Assignment) is intact; delete
-       style="display:none" to bring it back. Kept in the DOM because
-       showTab() still sets its class. -->
-  <div class="tab" id="tabBaskets" onclick="showTab('baskets')" style="display:none">Baskets</div>
+  <!-- UNHIDDEN 2026-09-30 at Nate's request: "there is no UI for this tool"
+       for the backtester. There was one all along -- it was behind this tab,
+       hidden while the app was built out Ripster-only, along with the Universe
+       Screener and Engine Assignment. Nothing was built to bring it back; one
+       attribute was deleted.
+       Renamed Baskets -> Tools because it holds four cards and the backtester
+       is the one he came looking for, so naming it after the least interesting
+       of them is how it stayed lost. -->
+  <div class="tab" id="tabBaskets" onclick="showTab('baskets')">Tools</div>
   <div class="tab" id="tabLogs" onclick="showTab('logs')">Trade Logs</div>
   <div class="tab" id="tabJournal" onclick="showTab('journal')">Journal<span id="jrnBadge" class="badge" style="display:none">0</span></div>
   <div class="tab" id="tabPerf" onclick="showTab('perf')">Performance</div>
@@ -6156,6 +6160,16 @@ async function pollBacktest() {
     `<span class="k">Avg win / loss</span><span class="v">$${m.avg_win} / $${m.avg_loss}</span>` +
     `<span class="k">Total P/L</span><span class="v">$${m.total_pnl}</span>` +
     `<span class="k">Return on capital</span><span class="v">${m.return_on_capital_pct}%</span>` +
+    // THE RATIO VIEW, ruled 2026-09-30: "a 1 trade ratio would be quite a
+    // useful figure." Every dollar figure above is an artefact of the capital
+    // and alloc boxes rather than money anyone made, which is what made them
+    // feel like "random figures". These are scale-free, so a $1,000 name and a
+    // $60 one are directly comparable. Computed since 0cdb972; this is the
+    // first thing that displays them.
+    `<span class="k">Per trade</span><span class="v">${m.expectancy_pct ?? '—'}%</span>` +
+    `<span class="k">Avg win / loss</span><span class="v">${m.avg_win_pct ?? '—'}% / ${m.avg_loss_pct ?? '—'}%</span>` +
+    `<span class="k">Win / loss ratio</span><span class="v">${m.win_loss_ratio ?? '—'}</span>` +
+    `<span class="k">P/L on notional</span><span class="v">${m.pnl_on_notional_pct ?? '—'}%</span>` +
     `<span class="k">Max drawdown</span><span class="v">${m.max_drawdown_pct}%</span>` +
     `<span class="k">Sharpe</span><span class="v">${m.sharpe}</span>` +
     `<span class="k">Sortino</span><span class="v">${m.sortino}</span>` +
