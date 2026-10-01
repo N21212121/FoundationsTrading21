@@ -20,6 +20,14 @@ which is what --against computes for you. A commit that adds 46 opening and
 46 closing braces is internally balanced even though the absolute counts stay
 wrong. That is the only honest reading of this tool.
 
+ONE MORE CAVEAT, learned the hard way on 2026-10-01. Because the stripper
+cannot parse regex literals, THE DELTA READING IS ONLY VALID FOR AN EDIT THAT
+NEITHER ADDS NOR REMOVES ONE. Deleting the OU engine-assignment JS removed two
+regexes with it, and this tool reported -3 open / -4 close braces on an edit
+that was in fact balanced. depmap_check.py does handle regex literals and
+confirmed the file's pre-existing imbalance was unchanged. So if this fails on
+a commit that touched a regex, check with depmap_check.py before believing it.
+
 See design/00-project-board.md section 1 for where this sits among the
 verification that actually exists.
 """
