@@ -1072,6 +1072,80 @@
   #scrFeed.mo-pulse { animation: moBreathe 2.4s ease-in-out infinite; }
   @keyframes moBreathe { 0%,100% { opacity: 1 } 50% { opacity: .55 } }
 
+
+  /* ═══ TRADE DESK ═══════════════════════════════════════════════════════
+     An instrument panel, in this app's own palette rather than a synth's.
+     It obeys design/08's one rule literally, which is why it reads as part
+     of the program: A SURFACE THAT ACCEPTS INPUT IS LIFTED OUT AND INVERTS
+     WHEN PRESSED; A SURFACE THAT REPORTS IS CARVED IN. So every knob and
+     toggle is raised, and every readout is a well. Nothing here is styled
+     for decoration.
+
+     Nate, board d-signal-panel: "I would like for you to build a MOOG UI for
+     the Trade Desk. I want the theme to match the current Foundations
+     Trading theme; Not make it music-related." */
+  .deskWrap { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .deskHead { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .deskHead h2 { margin:0; font-size:17px; }
+  .deskNote { font-size:11.5px; color:var(--text-dim); flex:1 1 240px;
+              min-width:0; }
+
+  .deskGrid { display:grid; gap:12px;
+              grid-template-columns:repeat(auto-fit,minmax(285px,1fr)); }
+
+  /* A strip is one group of related controls. Raised, because the whole
+     strip accepts input. */
+  .strip { background:var(--card); border:1px solid var(--border);
+           border-top:3px solid var(--navy-3); border-radius:9px;
+           padding:12px 13px; box-shadow:var(--elev-2); min-width:0; }
+  .strip.off { border-top-color:var(--border); }
+  .strip h3 { margin:0 0 2px; font-size:13px; font-weight:600; }
+  .strip .sub { font-size:11px; color:var(--text-dim);
+                margin-bottom:10px; }
+
+  .knobRow { display:flex; gap:14px; flex-wrap:wrap; }
+  .knob { display:flex; flex-direction:column; align-items:center; gap:5px;
+          width:78px; }
+  .knob svg { display:block; cursor:ns-resize; touch-action:none;
+              filter:drop-shadow(0 2px 3px rgba(var(--shadow-rgb),.16)); }
+  .knob svg:focus-visible { outline:2px solid var(--royal);
+                            outline-offset:3px; border-radius:50%; }
+  .knob .kcap { font-size:10px; text-transform:uppercase;
+                letter-spacing:.06em; color:var(--text-dim);
+                text-align:center; line-height:1.2; }
+  /* carved: it reports */
+  .knob .kval { font-family:var(--mono,ui-monospace,monospace);
+                font-size:12px; font-weight:600; padding:1px 7px;
+                border-radius:4px; background:var(--sunk);
+                box-shadow:inset 0 1px 2px rgba(var(--shadow-rgb),.14);
+                min-width:52px; text-align:center; }
+
+  /* lifted, inverts when on */
+  .tgl { font-size:12px; font-weight:600; padding:5px 11px; cursor:pointer;
+         border:1px solid var(--border); border-radius:6px;
+         background:var(--card-2); color:var(--text);
+         box-shadow:var(--elev-1); }
+  .tgl:hover { border-color:var(--royal); }
+  .tgl[aria-pressed="true"] { background:var(--navy-3); color:#fff;
+    border-color:var(--navy-3); box-shadow:inset 0 2px 4px
+    rgba(var(--shadow-rgb),.28); }
+
+  /* the big carved readout: this is the panel saying what it will DO */
+  .deskSays { background:var(--sunk); border-radius:7px; padding:10px 12px;
+              box-shadow:inset 0 2px 4px rgba(var(--shadow-rgb),.13);
+              font-size:12.5px; line-height:1.5; }
+  .deskSays b { font-weight:600; }
+  .deskWarn { border-left:3px solid var(--trigger-edge);
+              padding-left:9px; margin-top:8px; font-size:12px;
+              color:var(--text-dim); }
+  .deskMsg { font-size:12px; min-height:16px; }
+  .deskMsg.bad { color:var(--red); }
+  .deskMsg.good { color:var(--green); }
+  .deskEmpty { background:var(--card); border:1px dashed var(--border);
+               border-radius:9px; padding:18px; font-size:13px;
+               color:var(--text-dim); }
+  @media (max-width:620px) { .knob { width:70px; } }
+
   @media (prefers-reduced-motion: reduce) {
     .mo-busy::after, #scrFeed.mo-pulse { animation: none; }
     [data-live] { transition: none; }
@@ -1092,6 +1166,7 @@
        Renamed Baskets -> Tools because it holds four cards and the backtester
        is the one he came looking for, so naming it after the least interesting
        of them is how it stayed lost. -->
+  <div class="tab" id="tabDesk" onclick="showTab('desk')">Trade Desk</div>
   <div class="tab" id="tabBt" onclick="showTab('bt')">Backtester</div>
   <div class="tab" id="tabBaskets" onclick="showTab('baskets')">Tools</div>
   <div class="tab" id="tabLogs" onclick="showTab('logs')">Trade Logs</div>
@@ -1810,6 +1885,20 @@
      keeping the card alone in its own grid is what makes room for it.
      The card markup below was MOVED verbatim out of basketsView. Nothing
      about the panel changed; only where it lives. -->
+
+<div id="deskView" style="display:none;">
+  <div class="deskWrap">
+    <div class="deskHead">
+      <h2>Trade Desk</h2>
+      <select id="deskTicker" onchange="deskPick()" aria-label="Ticker"></select>
+      <span class="deskNote">Per-stock strategy and exit parameters. The Desk
+        holds the settings; the order path only carries them out.</span>
+    </div>
+    <div id="deskBody"></div>
+    <div class="deskMsg" id="deskMsg"></div>
+  </div>
+</div>
+
 <div id="btView" style="display:none;">
   <div class="card tool-card" id="card-bt">
     <h2>Backtester<span class="chip" id="maxBt" title="maximize"
@@ -3090,10 +3179,12 @@ function showTab(which) {
   $('logsView').style.display = which === 'logs' ? 'flex' : 'none';
   $('basketsView').style.display = which === 'baskets' ? 'grid' : 'none';
   $('btView').style.display = which === 'bt' ? 'grid' : 'none';
+  $('deskView').style.display = which === 'desk' ? 'block' : 'none';
   $('tabDash').className = 'tab' + (which === 'dash' ? ' active' : '');
   $('tabLogs').className = 'tab' + (which === 'logs' ? ' active' : '');
   $('tabBaskets').className = 'tab' + (which === 'baskets' ? ' active' : '');
   $('tabBt').className = 'tab' + (which === 'bt' ? ' active' : '');
+  $('tabDesk').className = 'tab' + (which === 'desk' ? ' active' : '');
   $('journalView').style.display = which === 'journal' ? 'flex' : 'none';
   $('perfView').style.display    = which === 'perf'    ? 'flex' : 'none';
   $('tabJournal').className = 'tab' + (which === 'journal' ? ' active' : '');
@@ -3114,6 +3205,7 @@ function showTab(which) {
     if (b) { b.textContent = '0'; b.style.display = 'none'; }
   }
   if (which === 'perf') { perfLoadLayers(); perfLoad(); }
+  if (which === 'desk') deskLoad();
   if (which === 'bt') { refreshBaskets(); pollBacktest(); }
   if (which === 'baskets') { refreshBaskets(); loadSectors(); pollScreen(); }
 }
@@ -7007,6 +7099,309 @@ function toggleToolMax(cardId, chipId) {
 
 function restoreToolMax() {
   if (_maxedTool) toggleToolMax(_maxedTool.card, _maxedTool.chip);
+}
+
+
+/* ══════════════ TRADE DESK ══════════════
+   The Desk owns per-stock strategy and exit parameters. Two reads of the
+   architecture it implements, both already in the codebase:
+
+     engine_contract draws the line between WHAT to trade and HOW to trade
+     it. The Desk is the front panel for the "what".
+
+     exit_ladder proposes intents on bar close and trade_router disposes.
+     So a "stop loss" set here is a PARAMETER, not a mechanism -- which is
+     Nate's own framing: "the buying/selling portion should simply take
+     orders from parameters set".
+
+   Every knob is ATR-keyed on purpose. A template is written before any entry
+   exists, so distance is the only expressible unit -- and an ATR-keyed rung
+   is one backtester.resolve_ladder_template can replay, which is the rule
+   that lets these knobs exist at all (design/07 section 1). */
+
+let DESK = { rows: [], engines: [], dflt: '', limits: null, cur: null,
+             draft: null, dirty: false };
+
+async function deskLoad() {
+  let d;
+  try { d = await api('/api/desk'); }
+  catch (e) { $('deskBody').innerHTML =
+    `<div class="deskEmpty">Could not reach the desk: ${e}</div>`; return; }
+  DESK.rows = d.rows || [];
+  DESK.engines = d.engines || [];
+  DESK.dflt = d.default_engine || '';
+  DESK.limits = d.limits || null;
+  const sel = $('deskTicker');
+  sel.innerHTML = DESK.rows.map(r =>
+    `<option value="${r.ticker}">${r.ticker}</option>`).join('');
+  if (DESK.rows.length) {
+    if (!DESK.cur || !DESK.rows.some(r => r.ticker === DESK.cur)) {
+      DESK.cur = DESK.rows[0].ticker;
+    }
+    sel.value = DESK.cur;
+  } else {
+    DESK.cur = null;
+  }
+  deskRender();
+}
+
+function deskPick() { DESK.cur = $('deskTicker').value; deskRender(); }
+
+function deskRow() { return DESK.rows.find(r => r.ticker === DESK.cur) || null; }
+
+/* The draft is what the knobs move. Nothing is written until Apply, so a
+   half-turned knob is never a live trading parameter. */
+function deskDraft(row) {
+  const l = row.ladder || {};
+  return {
+    engine: row.engine_explicit ? row.engine : '',
+    rungs: (l.rungs || []).map(r => ({ frac: r.frac, atr: r.atr })),
+    ratchet: l.ratchet ? { enabled: true, atr_mult: l.ratchet.atr_mult }
+                       : { enabled: false, atr_mult: 0.5 },
+    remainder: l.remainder || 'engine'
+  };
+}
+
+function deskRender() {
+  const host = $('deskBody');
+  const row = deskRow();
+  if (!row) {
+    host.innerHTML = `<div class="deskEmpty">
+      <b>No names on the desk yet.</b><br>
+      The Desk configures tickers from your watchlist, and the watchlist is
+      empty. Add one on the Dashboard and it appears here with the default
+      engine (<code>${DESK.dflt || 'none registered'}</code>) and no exit
+      parameters &mdash; which is the state design/07 &sect;6.1's measurements
+      support.</div>`;
+    return;
+  }
+  if (!DESK.draft || DESK.draft._t !== row.ticker) {
+    DESK.draft = deskDraft(row);
+    DESK.draft._t = row.ticker;
+    DESK.dirty = false;
+  }
+  const d = DESK.draft;
+  const lim = DESK.limits || { max_rungs: 3, atr_min: 0.05, atr_max: 3,
+                               frac_min: 0.05, ratchet_min: 0.05,
+                               ratchet_max: 3 };
+
+  let rungs = '';
+  for (let i = 0; i < lim.max_rungs; i++) {
+    const r = d.rungs[i];
+    const on = !!r;
+    rungs += `<div class="strip${on ? '' : ' off'}">
+      <h3>Rung ${i + 1}</h3>
+      <div class="sub">${on ? 'sells part of the position on the way up'
+                            : 'not set'}</div>
+      <div class="knobRow">
+        ${deskKnob('frac' + i, 'size', on ? r.frac : 0.33,
+                   lim.frac_min, 1, 0.01, v => Math.round(v * 100) + '%')}
+        ${deskKnob('atr' + i, 'distance', on ? r.atr : 0.25,
+                   lim.atr_min, lim.atr_max, 0.05, v => v.toFixed(2) + ' ATR')}
+      </div>
+      <div class="rmeta" style="margin-top:9px">
+        <button class="tgl" aria-pressed="${on}"
+                onclick="deskToggleRung(${i})">${on ? 'active' : 'off'}</button>
+      </div>
+    </div>`;
+  }
+
+  host.innerHTML = `
+    <div class="deskGrid">
+      <div class="strip">
+        <h3>Strategy</h3>
+        <div class="sub">which engine decides entries and structural exits</div>
+        <select id="deskEngine" onchange="deskMark()" style="width:100%">
+          <option value="">follow the default &mdash; ${DESK.dflt}</option>
+          ${DESK.engines.map(e =>
+            `<option value="${e}"${d.engine === e ? ' selected' : ''}>${e}</option>`
+          ).join('')}
+        </select>
+        <div class="sub" style="margin:9px 0 0">Mode is set on the Dashboard
+          (RUN / PAUSE) and the bot's own AUTO / MANUAL switch is in the top
+          bar. Neither is duplicated here.</div>
+      </div>
+      ${rungs}
+      <div class="strip${d.ratchet.enabled ? '' : ' off'}">
+        <h3>Ratchet</h3>
+        <div class="sub">trails the high-water mark, in ATR</div>
+        <div class="knobRow">
+          ${deskKnob('rat', 'distance', d.ratchet.atr_mult,
+                     lim.ratchet_min, lim.ratchet_max, 0.05,
+                     v => v.toFixed(2) + ' ATR')}
+        </div>
+        <div class="rmeta" style="margin-top:9px">
+          <button class="tgl" aria-pressed="${d.ratchet.enabled}"
+                  onclick="deskToggleRatchet()">${d.ratchet.enabled ? 'active' : 'off'}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="deskSays" style="margin-top:12px">
+      <b>${row.ticker} will be let go like this:</b><br>
+      <span id="deskSays">${esc(row.ladder_says || '')}</span>
+      <div class="deskWarn">Exit parameters default to none, and that is a
+        measurement rather than caution: design/07 &sect;6.1 found a
+        0.25/0.50 ATR scale-out raised the win rate from 28.71% to 43.56%
+        and took P&amp;L from &minus;206.89 to &minus;353.71. The ratchet
+        fires more as you tighten it and never beat the control. Set these if
+        you want to test them; the backtester can sweep every one of them.
+      </div>
+    </div>
+    <div class="rmeta" style="margin-top:10px">
+      <button class="buy" onclick="deskApply()">APPLY TO ${row.ticker}</button>
+      <button onclick="deskRevert()">Revert</button>
+      <span id="deskDirty" class="deskNote"></span>
+    </div>`;
+  deskDirtyNote();
+}
+
+/* A knob: SVG, dragged vertically, arrow-keyable. The indicator sweeps 270
+   degrees, which is what a real panel does -- a full circle has no stop and
+   so no sense of range. */
+function deskKnob(id, cap, value, min, max, step, fmt) {
+  const t = (value - min) / (max - min);
+  const ang = -135 + t * 270;
+  const rad = (ang - 90) * Math.PI / 180;
+  const x = 22 + Math.cos(rad) * 13, y = 22 + Math.sin(rad) * 13;
+  return `<div class="knob">
+    <svg width="44" height="44" viewBox="0 0 44 44" tabindex="0" role="slider"
+         aria-label="${cap}" aria-valuemin="${min}" aria-valuemax="${max}"
+         aria-valuenow="${value}"
+         data-knob="${id}" data-min="${min}" data-max="${max}"
+         data-step="${step}" data-val="${value}">
+      <circle cx="22" cy="22" r="17" fill="var(--card-2)"
+              stroke="var(--border)"></circle>
+      <circle cx="22" cy="22" r="17" fill="none" stroke="var(--navy-3)"
+              stroke-width="2.5" stroke-linecap="round"
+              stroke-dasharray="${(t * 80).toFixed(1)} 200"
+              transform="rotate(135 22 22)"></circle>
+      <line x1="22" y1="22" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}"
+            stroke="var(--navy)" stroke-width="2.5"
+            stroke-linecap="round"></line>
+    </svg>
+    <span class="kcap">${cap}</span>
+    <span class="kval" data-kval="${id}">${fmt(value)}</span>
+  </div>`;
+}
+
+function deskKnobSet(el, v) {
+  const min = +el.dataset.min, max = +el.dataset.max, step = +el.dataset.step;
+  v = Math.min(max, Math.max(min, Math.round(v / step) * step));
+  el.dataset.val = v;
+  el.setAttribute('aria-valuenow', v);
+  const id = el.dataset.knob;
+  const d = DESK.draft;
+  if (id === 'rat') d.ratchet.atr_mult = v;
+  else if (id.startsWith('frac')) {
+    const i = +id.slice(4); if (d.rungs[i]) d.rungs[i].frac = v;
+  } else if (id.startsWith('atr')) {
+    const i = +id.slice(3); if (d.rungs[i]) d.rungs[i].atr = v;
+  }
+  // redraw just this knob's geometry and readout; no full re-render, so the
+  // pointer keeps its grab
+  const t = (v - min) / (max - min);
+  const ang = -135 + t * 270, rad = (ang - 90) * Math.PI / 180;
+  const line = el.querySelector('line');
+  line.setAttribute('x2', (22 + Math.cos(rad) * 13).toFixed(1));
+  line.setAttribute('y2', (22 + Math.sin(rad) * 13).toFixed(1));
+  el.querySelectorAll('circle')[1]
+    .setAttribute('stroke-dasharray', (t * 80).toFixed(1) + ' 200');
+  const out = document.querySelector(`[data-kval="${id}"]`);
+  if (out) out.textContent = id.startsWith('frac')
+    ? Math.round(v * 100) + '%' : v.toFixed(2) + ' ATR';
+  deskMark();
+}
+
+document.addEventListener('pointerdown', ev => {
+  const k = ev.target.closest && ev.target.closest('[data-knob]');
+  if (!k) return;
+  ev.preventDefault();
+  k.focus();
+  const startY = ev.clientY, startV = +k.dataset.val;
+  const min = +k.dataset.min, max = +k.dataset.max;
+  const move = e => deskKnobSet(k, startV + ((startY - e.clientY) / 110) * (max - min));
+  const up = () => { document.removeEventListener('pointermove', move);
+                     document.removeEventListener('pointerup', up); };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+});
+
+document.addEventListener('keydown', ev => {
+  const k = ev.target.closest && ev.target.closest('[data-knob]');
+  if (!k) return;
+  const step = +k.dataset.step, v = +k.dataset.val;
+  const big = step * 5;
+  let nv = null;
+  if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') nv = v + step;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') nv = v - step;
+  if (ev.key === 'PageUp') nv = v + big;
+  if (ev.key === 'PageDown') nv = v - big;
+  if (ev.key === 'Home') nv = +k.dataset.min;
+  if (ev.key === 'End') nv = +k.dataset.max;
+  if (nv === null) return;
+  ev.preventDefault();
+  deskKnobSet(k, nv);
+});
+
+function deskToggleRung(i) {
+  const d = DESK.draft;
+  if (d.rungs[i]) {
+    d.rungs.splice(i, 1);
+  } else {
+    // a new rung sits beyond the last one, because the template must be
+    // ordered by increasing distance or the server refuses it
+    const last = d.rungs.length ? d.rungs[d.rungs.length - 1].atr : 0.0;
+    d.rungs.push({ frac: 0.33, atr: Math.min(3, Math.max(0.25, last + 0.25)) });
+  }
+  DESK.dirty = true;
+  deskRender();
+}
+function deskToggleRatchet() {
+  DESK.draft.ratchet.enabled = !DESK.draft.ratchet.enabled;
+  DESK.dirty = true;
+  deskRender();
+}
+function deskMark() {
+  DESK.dirty = true;
+  const e = $('deskEngine');
+  if (e) DESK.draft.engine = e.value;
+  deskDirtyNote();
+}
+function deskDirtyNote() {
+  const n = $('deskDirty');
+  if (n) n.textContent = DESK.dirty
+    ? 'unsaved \u2014 nothing is live until you apply' : '';
+}
+function deskRevert() { DESK.draft = null; deskRender(); }
+
+async function deskApply() {
+  const row = deskRow();
+  if (!row) return;
+  const d = DESK.draft;
+  const body = {
+    engine: d.engine,
+    ladder: (d.rungs.length || d.ratchet.enabled)
+      ? { rungs: d.rungs.map(r => ({ frac: r.frac, atr: r.atr })),
+          ratchet: d.ratchet.enabled
+            ? { enabled: true, atr_mult: d.ratchet.atr_mult } : null,
+          remainder: d.remainder }
+      : null
+  };
+  const m = $('deskMsg');
+  try {
+    const r = await api('/api/desk/' + encodeURIComponent(row.ticker), body);
+    if (r.error) { m.className = 'deskMsg bad';
+                   m.textContent = 'refused: ' + r.error; return; }
+    m.className = 'deskMsg good';
+    m.textContent = `${r.ticker} saved.`;
+    DESK.dirty = false;
+    DESK.draft = null;
+    await deskLoad();
+  } catch (e) {
+    m.className = 'deskMsg bad';
+    m.textContent = 'failed: ' + e;
+  }
 }
 
 /* ── boot ── */

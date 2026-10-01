@@ -10,6 +10,22 @@ opened a phantom string and swallowed real structure. A checker that cries
 wolf is worse than no checker, so regex literals are handled here, with the
 standard heuristic -- a `/` in a position where a value is expected starts a
 regex, a `/` after a value is division.
+
+WHAT IT STILL CANNOT DO, found 2026-10-01 while adding the Trade Desk:
+NESTED TEMPLATE LITERALS. A quote scanner that hits the outer backtick of
+
+    `<a>${list.map(x => `<b>${x}</b>`).join('')}</a>`
+
+runs forward to the NEXT backtick -- the inner one -- and everything after
+it is misaligned, so code reads as string and string reads as code.
+jscheck.py has the same flaw. Neither tool can validate a file that uses
+them, and static/index.html now does, heavily.
+
+The substitute for that case is a CONTEXT-FREE check on the DIFF rather
+than on the file -- hunkbal.py: count braces and parens in each hunk's
+removed and added lines and require the net change to be zero. That cannot
+prove a file is balanced, but it does prove an edit closes everything it
+opens, which is the error this whole family of tools exists to catch.
 """
 import io
 import re

@@ -1215,6 +1215,7 @@ def _force_engine_off():
     _auto_trading = False
 
 
+import desk_routes
 import journal_routes
 import ledger_routes
 import screener_routes
@@ -1223,6 +1224,11 @@ app.register_blueprint(journal_routes.bp)
 app.register_blueprint(ledger_routes.make_bp(alpaca))
 app.register_blueprint(screener_routes.make_bp(alpaca))
 app.register_blueprint(setup_routes.make_bp(alpaca, _force_engine_off))
+# The Desk owns per-ticker strategy and exit parameters (board d-signal-hub).
+# _sync_engine_overrides is passed in rather than imported there, so the
+# resolver's state stays this module's to mutate.
+app.register_blueprint(desk_routes.make_bp(registry, resolver,
+                                           _sync_engine_overrides))
 
 
 @app.route('/api/health')
