@@ -37,3 +37,7 @@ alpaca_keys.json
 build/
 dist/
 *.spec
+
+# Built by depmap_page.py from the template + a fresh scan. Derived, so
+# it is regenerated rather than versioned; the generator is what is tracked.
+depmap_built.html
