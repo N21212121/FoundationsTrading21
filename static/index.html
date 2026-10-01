@@ -1092,6 +1092,7 @@
        Renamed Baskets -> Tools because it holds four cards and the backtester
        is the one he came looking for, so naming it after the least interesting
        of them is how it stayed lost. -->
+  <div class="tab" id="tabBt" onclick="showTab('bt')">Backtester</div>
   <div class="tab" id="tabBaskets" onclick="showTab('baskets')">Tools</div>
   <div class="tab" id="tabLogs" onclick="showTab('logs')">Trade Logs</div>
   <div class="tab" id="tabJournal" onclick="showTab('journal')">Journal<span id="jrnBadge" class="badge" style="display:none">0</span></div>
@@ -1802,39 +1803,14 @@
 </div>
 
 <div id="toolBackdrop" onclick="restoreToolMax()"></div>
-<div id="basketsView" style="display:none;">
-  <div class="card tool-card" id="card-bk">
-    <h2>Baskets<span class="chip" id="maxBk" title="maximize"
-      onclick="toggleToolMax('card-bk','maxBk')">⛶</span></h2>
-    <div style="flex:0 1 auto; overflow:auto; min-height:0; margin-bottom:10px;">
-      <table>
-        <thead><tr><th>Name</th><th>Symbols</th><th>Engine</th>
-          <th>Alloc %</th><th style="width:170px"></th></tr></thead>
-        <tbody id="bkBody"></tbody>
-      </table>
-    </div>
-    <div class="section-label">Create / Edit</div>
-    <div class="form-row">
-      <input type="text" id="bkName" placeholder="basket name"
-             style="width:160px; text-transform:none">
-      <select id="bkEngine" title="engine for this basket"></select>
-      <input type="number" id="bkAlloc" value="1" step="0.1" min="0.1"
-             style="width:70px" title="default allocation % per ticker">
-      <span style="font-size:11px;color:var(--text-dim)">% each</span>
-    </div>
-    <textarea id="bkSymbols"
-              placeholder="Symbols (commas, spaces, or new lines): NVDA AMD AVGO ..."
-              style="width:100%;min-height:64px;font-family:inherit;font-size:12px;
-                     padding:6px;border:1px solid var(--border);border-radius:5px;
-                     resize:vertical;margin-bottom:8px"></textarea>
-    <div class="form-row">
-      <input type="text" id="bkNotes" placeholder="notes"
-             style="flex:1; text-transform:none">
-      <button class="buy" onclick="saveBasket()">Save Basket</button>
-    </div>
-    <div id="bkMsg" style="font-size:12px;color:var(--text-dim);min-height:18px"></div>
-  </div>
-
+<!-- The backtester gets a tab of its own, 2026-09-30. Nate: "this now makes
+     me want to isolate the backtester into one tab, so that the backtesting
+     tool itself can exist with its corresponding journal right there."
+     The journal half does not exist yet -- this view is where it goes, and
+     keeping the card alone in its own grid is what makes room for it.
+     The card markup below was MOVED verbatim out of basketsView. Nothing
+     about the panel changed; only where it lives. -->
+<div id="btView" style="display:none;">
   <div class="card tool-card" id="card-bt">
     <h2>Backtester<span class="chip" id="maxBt" title="maximize"
       onclick="toggleToolMax('card-bt','maxBt')">⛶</span></h2>
@@ -1870,6 +1846,41 @@
          min-height:18px;margin-bottom:6px"></div>
     <div id="btResults" style="flex:1;overflow:auto;min-height:0"></div>
   </div>
+</div>
+
+<div id="basketsView" style="display:none;">
+  <div class="card tool-card" id="card-bk">
+    <h2>Baskets<span class="chip" id="maxBk" title="maximize"
+      onclick="toggleToolMax('card-bk','maxBk')">⛶</span></h2>
+    <div style="flex:0 1 auto; overflow:auto; min-height:0; margin-bottom:10px;">
+      <table>
+        <thead><tr><th>Name</th><th>Symbols</th><th>Engine</th>
+          <th>Alloc %</th><th style="width:170px"></th></tr></thead>
+        <tbody id="bkBody"></tbody>
+      </table>
+    </div>
+    <div class="section-label">Create / Edit</div>
+    <div class="form-row">
+      <input type="text" id="bkName" placeholder="basket name"
+             style="width:160px; text-transform:none">
+      <select id="bkEngine" title="engine for this basket"></select>
+      <input type="number" id="bkAlloc" value="1" step="0.1" min="0.1"
+             style="width:70px" title="default allocation % per ticker">
+      <span style="font-size:11px;color:var(--text-dim)">% each</span>
+    </div>
+    <textarea id="bkSymbols"
+              placeholder="Symbols (commas, spaces, or new lines): NVDA AMD AVGO ..."
+              style="width:100%;min-height:64px;font-family:inherit;font-size:12px;
+                     padding:6px;border:1px solid var(--border);border-radius:5px;
+                     resize:vertical;margin-bottom:8px"></textarea>
+    <div class="form-row">
+      <input type="text" id="bkNotes" placeholder="notes"
+             style="flex:1; text-transform:none">
+      <button class="buy" onclick="saveBasket()">Save Basket</button>
+    </div>
+    <div id="bkMsg" style="font-size:12px;color:var(--text-dim);min-height:18px"></div>
+  </div>
+
 
   <div class="card tool-card" id="card-sc">
     <h2>Universe Screener<span class="chip" id="maxSc" title="maximize"
@@ -3099,9 +3110,11 @@ function showTab(which) {
   $('dash').style.display = which === 'dash' ? 'grid' : 'none';
   $('logsView').style.display = which === 'logs' ? 'flex' : 'none';
   $('basketsView').style.display = which === 'baskets' ? 'grid' : 'none';
+  $('btView').style.display = which === 'bt' ? 'grid' : 'none';
   $('tabDash').className = 'tab' + (which === 'dash' ? ' active' : '');
   $('tabLogs').className = 'tab' + (which === 'logs' ? ' active' : '');
   $('tabBaskets').className = 'tab' + (which === 'baskets' ? ' active' : '');
+  $('tabBt').className = 'tab' + (which === 'bt' ? ' active' : '');
   $('journalView').style.display = which === 'journal' ? 'flex' : 'none';
   $('perfView').style.display    = which === 'perf'    ? 'flex' : 'none';
   $('tabJournal').className = 'tab' + (which === 'journal' ? ' active' : '');
@@ -3122,7 +3135,8 @@ function showTab(which) {
     if (b) { b.textContent = '0'; b.style.display = 'none'; }
   }
   if (which === 'perf') { perfLoadLayers(); perfLoad(); }
-  if (which === 'baskets') { refreshBaskets(); pollBacktest(); loadSectors();
+  if (which === 'bt') { refreshBaskets(); pollBacktest(); }
+  if (which === 'baskets') { refreshBaskets(); loadSectors();
                              pollScreen(); loadAssignBands(); pollAssign(); }
 }
 

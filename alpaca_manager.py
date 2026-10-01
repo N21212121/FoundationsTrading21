@@ -32,10 +32,23 @@ from config_manager import log_forensic
 # ─── RATE LIMITER ──────────────────────────────────────────────────────────────
 
 class RateLimiter:
-    """Token bucket. Default sized for Algo Trader Plus (10,000/min) with
-    headroom — we cap ourselves at 9,000 so bursts never brush the real limit."""
+    """Token bucket. Sized for Algo Trader Plus (10,000/min) with headroom.
 
-    def __init__(self, max_per_minute=9000):
+    RAISED 9,000 -> 9,900 on 2026-09-30 at Nate's instruction, for the
+    continuous universe backtest: "I have a 10,000 API/min call rate. I
+    believe Foundations is capped to 9,000, but we can update that to 9,900
+    which leaves more than enough room for multiple trades."
+
+    100/min of headroom instead of 1,000. Worth knowing what that buys and
+    what it spends: the bucket is a GUARDRAIL against our own bursts, not a
+    negotiation with Alpaca -- brushing the real limit returns 429s, which
+    this client does not currently retry. A trade is a handful of calls, so
+    100/min is ample for the order path; the risk is a sweep saturating the
+    bucket for a sustained minute while an order wants through, since wait()
+    is first-come and has no priority lane. If that ever bites, the fix is a
+    reserved allowance for the order path rather than a lower ceiling."""
+
+    def __init__(self, max_per_minute=9900):
         self.capacity = max_per_minute
         self.tokens = float(max_per_minute)
         self.refill_rate = max_per_minute / 60.0   # tokens per second
