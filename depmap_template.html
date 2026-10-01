@@ -195,7 +195,6 @@
     <button id="bLegacy" aria-pressed="false" title="the six patch_*.py files and the two tooling scripts">dead weight</button>
     <button id="bCluster" aria-pressed="true" title="pull each role toward its own centre">cluster by role</button>
     <button id="bLabels" aria-pressed="true">labels</button>
-    <button id="bReheat">shake</button>
   </div>
 </div>
 
@@ -606,12 +605,6 @@
   toggle('bLegacy', function () { return showLegacy; }, function (v) { showLegacy = v; });
   toggle('bCluster', function () { return cluster; }, function (v) { cluster = v; });
   toggle('bLabels', function () { return showLabels; }, function (v) { showLabels = v; });
-  document.getElementById('bReheat').addEventListener('click', function () {
-    nodes.forEach(function (n) {
-      n.vx += (Math.random() - .5) * 26; n.vy += (Math.random() - .5) * 26;
-    });
-    alpha = 1;
-  });
   document.getElementById('q').addEventListener('input', function (ev) {
     query = ev.target.value;
     var q = query.trim().toLowerCase();

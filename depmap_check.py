@@ -89,9 +89,13 @@ for o, c, name in (('{', '}', 'braces'), ('(', ')', 'parens'),
 # Count tags OUTSIDE the json data block: a docstring in the scanned repo can
 # legitimately contain the text "<script>" (jscheck.py's does), and that is
 # data, not markup.
-dstart = s.index('id="graph">')
-dend = s.index('</script>', dstart)
-markup = s[:dstart] + s[dend:]
+if 'id="graph">' in s:
+    dstart = s.index('id="graph">')
+    dend = s.index('</script>', dstart)
+    markup = s[:dstart] + s[dend:]
+else:
+    markup = s          # no inlined data block (the board reads its graph
+                        # from the artifact database instead)
 
 VOID = ('input', 'img', 'br', 'link', 'meta')
 print('elements (json data block excluded):')
