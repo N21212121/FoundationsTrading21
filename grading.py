@@ -159,6 +159,19 @@ PSYCH_TIER_CREDIT = {0: 2, 1: 3, 2: 4, 3: 4}
 # widens -- but the operative half of his ruling is the TIER, not the distance.
 PSYCH_NEAR_ATR = 1.0
 
+# C2's band edges. NAMED rather than inline, per design/00 §2's "one threshold
+# in one place: grading.py must never contain a raw number like 0.35." They
+# were inline at first commit and that was a breach -- caught by eye, which is
+# precisely the argument for running ft-doctrine on a diff rather than
+# trusting the eye.
+#
+# THEY BELONG IN THE MEASUREMENT MODULE, not here. C2 is a judgement condition
+# computed from ctx, so it had nowhere else to live on the day grading.py
+# landed; when environment.py exists these move there and this file borrows
+# them by name the way it borrows screener's. Board: t-c2-thresholds.
+CLOUD_NEAR_ATR = 0.5     # a cloud this close behind price will catch a pullback
+CLOUD_REACH_ATR = 1.0    # beyond this it is too far to catch anything
+
 
 # ─── ALIGNMENT AND DIRECTION (§2) ──────────────────────────────────────────────
 
@@ -330,7 +343,7 @@ def _read_level_in_reach(state, direction):
         # gap in the data, and it is the best-evidenced bad state in the book
         # (no setup: -$36.10, n=30, mean owner grade 0.75). Letting it go N/A
         # would let the worst environment score by omission.
-        return 0, 'far', None, 'nothing within 0.50 ATR', \
+        return 0, 'far', None, f'nothing within {SC.APPROACH_ATR} ATR', \
             f'no level within {SC.APPROACH_ATR} ATR on the {direction} side'
     d = lv['distance_atr']
     lab = f"{lv.get('name')} at {d} ATR"
@@ -421,9 +434,9 @@ def _read_cloud_support(state, direction):
     gap = round(gap, 3)
     if gap <= 0:
         return 0, 'wrong_side', gap, f'{gap} ATR', 'price is not on the near side'
-    if gap <= 0.5:
+    if gap <= CLOUD_NEAR_ATR:
         return 4, 'close', gap, f'{gap} ATR', f'cloud sits {gap} ATR behind price'
-    if gap <= 1.0:
+    if gap <= CLOUD_REACH_ATR:
         return 2, 'mid', gap, f'{gap} ATR', f'cloud sits {gap} ATR behind price'
     return 0, 'far', gap, f'{gap} ATR', f'cloud is {gap} ATR away, too far to catch'
 
