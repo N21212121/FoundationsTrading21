@@ -1882,17 +1882,25 @@
   </div>
 
 
-  <div class="card tool-card" id="card-sc">
+  <!-- HIDDEN 2026-10-01, not deleted. Nate talked himself around this one and
+       then said so: it "adds too much chaos" for a day-trading program, but
+       "it's making more sense to have once additional engine bots are built
+       out." It is PREMATURE rather than wrong -- running one engine across a
+       universe is thin with one engine and is how you compare two. Hiding is
+       one attribute; deleting 480 lines you expect to want back is the move
+       that is hard to undo. Same mechanism that hid this whole tab for
+       months: delete style="display:none" to bring it back. -->
+  <div class="card tool-card" id="card-sc" style="display:none">
     <h2>Universe Screener<span class="chip" id="maxSc" title="maximize"
       onclick="toggleToolMax('card-sc','maxSc')">⛶</span></h2>
     <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
       Runs an engine across a sector, basket, or list and logs per-name
-      stats plus the pooled portfolio. Pick <b>OU pipeline</b> in the engine
-      box to gate first: the half-life estimator measures each name's clock
-      across five timeframes, names without one are excluded, and each
-      survivor sims on its assigned OU engine. The gate selects on a
-      bar-level statistic, not on P&amp;L, and the timeframe is arithmetic,
-      not search. Low-sample names (under 20 trades) are flagged, not
+      stats plus the pooled portfolio. One engine runs the whole universe:
+      the half-life gate that used to assign a different OU variant per name
+      went with the OU family on 2026-10-01. What it got right is worth
+      keeping for whatever replaces it &mdash; it selected on a bar-level
+      statistic rather than on P&amp;L, and the timeframe came from
+      arithmetic, not search. Low-sample names (under 20 trades) are flagged, not
       dropped.
     </div>
     <div class="form-row">
@@ -1905,7 +1913,7 @@
       <select id="scSector" onchange="scSectorChanged()" title="sector to screen"></select>
       <select id="scSub" title="subsector (optional)"></select>
       <select id="scEngine" onchange="scEngineChanged()"
-              title="engine, or the OU pipeline (gate + assign + sim)"></select>
+              title="engine to run across the universe"></select>
     </div>
     <div class="form-row">
       <label style="color:var(--text-dim);font-size:12px">start</label>
@@ -1941,38 +1949,9 @@
     <div id="scResults" style="flex:1;overflow:auto;min-height:0"></div>
   </div>
 
-  <div class="card tool-card" id="card-as" style="grid-column:1 / -1">
-    <h2>Engine Assignment<span class="chip" id="maxAs" title="maximize"
-      onclick="toggleToolMax('card-as','maxAs')">⛶</span></h2>
-    <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">
-      Fits one pooled theta line per name across 10m/30m/1h/2h/1D bars and
-      snaps each 'ou' name onto the OU engine whose bar size puts its
-      half-life nearest the centre of the shared 2–12 bar band. Arithmetic,
-      never P/L. <b>Dry run</b> shows the table and the would-be watchlist
-      diff; <b>Apply</b> writes engine overrides onto watchlist entries and
-      pauses OU names that lost their clock. Ripster names and names not on
-      the watchlist are never touched.
-    </div>
-    <div id="asBands" style="font-size:11px;color:var(--text-dim);
-         margin-bottom:8px"></div>
-    <div class="form-row">
-      <select id="asBasket" onchange="asSourceChanged()"
-              title="basket to assign"></select>
-      <input type="text" id="asSymbols" placeholder="or ad-hoc: NVDA,AMD"
-             style="flex:1; text-transform:none">
-    </div>
-    <div class="form-row">
-      <label style="color:var(--text-dim);font-size:12px">start</label>
-      <input type="date" id="asStart">
-      <label style="color:var(--text-dim);font-size:12px">end</label>
-      <input type="date" id="asEnd" title="blank = through today">
-      <button onclick="runAssign(false)">DRY RUN</button>
-      <button class="buy" onclick="runAssign(true)">APPLY</button>
-    </div>
-    <div id="asStatus" style="font-size:12px;color:var(--text-dim);
-         min-height:18px;margin-bottom:6px"></div>
-    <div id="asResults" style="flex:1;overflow:auto;min-height:0"></div>
-  </div>
+  <!-- The Engine Assignment card was DELETED 2026-10-01 with the OU
+       family it existed to assign. Per-stock strategy choice moves to
+       the Trade Desk, which owns it outright (board d-signal-hub). -->
 </div>
 
 <!-- order panel (design/07 §7) -->
@@ -3136,8 +3115,7 @@ function showTab(which) {
   }
   if (which === 'perf') { perfLoadLayers(); perfLoad(); }
   if (which === 'bt') { refreshBaskets(); pollBacktest(); }
-  if (which === 'baskets') { refreshBaskets(); loadSectors();
-                             pollScreen(); loadAssignBands(); pollAssign(); }
+  if (which === 'baskets') { refreshBaskets(); loadSectors(); pollScreen(); }
 }
 
 /* ══════════════ JOURNAL ══════════════ */
@@ -5927,7 +5905,6 @@ async function refreshBaskets() {
     names.map(n => `<option value="${n}">${n}</option>`).join('');
   $('btBasket').innerHTML = opts;
   if ($('scBasket')) $('scBasket').innerHTML = opts;
-  if ($('asBasket')) $('asBasket').innerHTML = opts;
 }
 
 async function editBasket(name) {
@@ -6750,7 +6727,6 @@ async function loadSectors() {
   const eng = await api('/api/engines');
   $('scEngine').innerHTML =
     `<option value="">engine: default (${eng.default})</option>` +
-    `<option value="__ou__">OU pipeline: gate → assign → sim</option>` +
     eng.engines.map(e => `<option value="${e}">${e}</option>`).join('');
 }
 
@@ -6770,9 +6746,11 @@ function scSourceChanged() {
 }
 
 function scEngineChanged() {
-  // Picking the pipeline pre-ticks compounding (his spec for this flow).
-  // Visible automation: the box is right there to untick.
-  if ($('scEngine').value === '__ou__') $('scCompound').checked = true;
+  /* Pre-ticked compounding when the OU pipeline was selected, which was the
+     only engine choice that implied it. The pipeline went with the OU family
+     on 2026-10-01, so there is nothing to infer from the engine box now. Kept
+     as the hook the select still calls, rather than editing the markup to
+     drop an onchange a second engine will want again. */
 }
 
 function scModeChanged() {
@@ -6801,14 +6779,12 @@ function portKV(m) {
 }
 
 async function runScreen() {
-  const ou = $('scEngine').value === '__ou__';
   const body = {
     start: $('scStart').value,
     end: $('scEnd').value || null,
     capital: parseFloat($('scCapital').value || 100000),
     alloc_mode: $('scMode').value,
     alloc_value: parseFloat($('scAlloc').value || 1),
-    ou_gate: ou,
     compound: $('scCompound').checked,
     sharpe_weight: $('scSharpe').checked,
   };
@@ -6819,7 +6795,7 @@ async function runScreen() {
     body.sector = $('scSector').value || null;
     body.subsector = $('scSub').value || null;
   }
-  if (!ou && $('scEngine').value) body.engine = $('scEngine').value;
+  if ($('scEngine').value) body.engine = $('scEngine').value;
   if (!body.start) { $('scStatus').textContent = 'start date required'; return; }
   const r = await api('/api/universe', body);
   if (r.error) { $('scStatus').textContent = `rejected: ${r.error}`; return; }
@@ -6846,7 +6822,7 @@ async function pollScreen() {
     $('scStatus').innerHTML =
       `<div class="prog-text" style="margin-bottom:2px">` +
       `${p.label} · ${j.n_symbols || '?'} names · ` +
-      `${p.ou_gate ? 'OU pipeline' : 'engine ' + p.engine}` +
+      `engine ${p.engine}` +
       `${p.compound ? ' · compounded' : ''}${tag}</div>` +
       progressHTML(j, 'names', 'scr') +
       jobControls('universe', j.state);
@@ -6870,7 +6846,7 @@ async function pollScreen() {
   const err = Object.keys(j.errors || {}).length;
   $('scStatus').innerHTML = doneHTML(
     `done: ${j.n_screened} names · ${p.label} · ` +
-    `${p.ou_gate ? 'OU pipeline' : 'engine ' + (j.engine_display || p.engine)}` +
+    `engine ${j.engine_display || p.engine}` +
     (skip ? ` · ${skip} no-data` : '') + (err ? ` · ${err} errored` : '') +
     (j.csv ? ' · CSV saved' : ''));
   _scrTable = j.table || [];
@@ -7031,152 +7007,6 @@ function toggleToolMax(cardId, chipId) {
 
 function restoreToolMax() {
   if (_maxedTool) toggleToolMax(_maxedTool.card, _maxedTool.chip);
-}
-
-/* ── engine assignment (theta line → OU family) ── */
-let _asBands = null;
-
-async function loadAssignBands() {
-  if (_asBands) return;
-  try { _asBands = await api('/api/assign/bands'); } catch (e) { return; }
-  const b = (_asBands.bands || []).map(x =>
-    `${x.engine.replace('ou_reversion_','')} (${x.timeframe}) ` +
-    `${x.hl_sessions_min}\u2013${x.hl_sessions_max}`).join(' \u00b7 ');
-  if ($('asBands')) $('asBands').textContent =
-    `resolvable half-life bands, sessions (960-min model): ${b} ` +
-    `\u00b7 snap target ${_asBands.target_hl_bars} bars`;
-}
-
-let _asTimer = null;
-
-function asSourceChanged() {
-  $('asSymbols').disabled = !!$('asBasket').value;
-}
-
-async function runAssign(apply) {
-  const body = {
-    start: $('asStart').value,
-    end: $('asEnd').value || null,
-    apply: !!apply,
-  };
-  if (!body.start) { $('asStatus').textContent = 'start date required'; return; }
-  if ($('asBasket').value) body.basket = $('asBasket').value;
-  else {
-    body.symbols = $('asSymbols').value.split(/[\s,]+/).filter(s => s.trim());
-    if (!body.symbols.length) {
-      $('asStatus').textContent = 'pick a basket or enter symbols'; return;
-    }
-  }
-  if (apply) {
-    const ok = await appConfirm('Apply assignments to the watchlist?',
-      `Writes each assigned name's <b>engine override</b> onto its ` +
-      `watchlist entry — persists across restarts and sweeps.<br><br>` +
-      `Names currently on an OU engine whose theta line no longer reads ` +
-      `'ou' are <b>cleared and set to PAUSE</b>: a stock that lost its ` +
-      `clock stops trading instead of falling back to Ripster under a ` +
-      `new flag.<br><br>` +
-      `Ripster names are untouched. Names not on the watchlist are ` +
-      `skipped and listed — deploying is your call, not the assigner's.`,
-      'APPLY');
-    if (!ok) return;
-  }
-  const r = await api('/api/assign', body);
-  if (r.error) { $('asStatus').textContent = `rejected: ${r.error}`; return; }
-  $('asStatus').innerHTML = progressHTML({progress: {}}, 'names');
-  $('asResults').innerHTML = '';
-  if (_asTimer) clearInterval(_asTimer);
-  pollAssign();
-  _asTimer = setInterval(pollAssign, POLL_MS);
-}
-
-async function pollAssign() {
-  let j;
-  try { j = await api('/api/assign'); } catch (e) { return; }
-
-  if (j.state === 'idle') {
-    $('asStatus').innerHTML =
-      '<div class="prog-text">no assignment run yet</div>';
-    if (_asTimer) { clearInterval(_asTimer); _asTimer = null; }
-    return;
-  }
-  if (j.state === 'running' || j.state === 'paused' || j.state === 'stopping') {
-    const p = j.params || {};
-    const tag = j.state === 'paused' ? ' · <b>paused</b>'
-              : j.state === 'stopping' ? ' · <b>stopping…</b>' : '';
-    $('asStatus').innerHTML =
-      `<div class="prog-text" style="margin-bottom:2px">` +
-      `${p.label} · ${j.n_symbols || '?'} names · ` +
-      `${(p.timeframes || []).length} timeframes · ` +
-      `${p.apply ? '<b>WILL APPLY</b>' : 'dry run'}${tag}</div>` +
-      progressHTML(j, 'names', 'as') +
-      jobControls('assign', j.state);
-    return;
-  }
-  if (_asTimer) { clearInterval(_asTimer); _asTimer = null; }
-  if (j.state === 'stopped') {
-    $('asStatus').innerHTML = doneHTML('stopped · work discarded');
-    $('asResults').innerHTML = '';
-    return;
-  }
-  if (j.state === 'error') {
-    $('asStatus').innerHTML =
-      `<div class="prog-text" style="color:var(--red)">error: ${j.error}</div>`;
-    return;
-  }
-
-  const p = j.params || {};
-  $('asStatus').innerHTML = doneHTML(
-    `done: ${j.n_assigned}/${j.n_names} assigned · ${p.label} · ` +
-    (j.applied ? 'APPLIED to watchlist' : 'dry run — nothing written') +
-    (j.csv ? ' · CSV saved' : ''));
-  renderAssign(j);
-  if (j.applied) refreshPositions();   // engine pills update immediately
-}
-
-function renderAssign(j) {
-  const rows = j.assignments || [];
-  if (!rows.length) {
-    $('asResults').innerHTML =
-      '<div style="color:var(--text-dim)">no results</div>';
-    return;
-  }
-  const n = v => (v === null || v === undefined) ? '—' : v;
-  const esc = s => String(s || '').replace(/"/g, '&quot;');
-  const head = '<tr><th>Ticker</th><th>Engine</th><th>TF</th>' +
-    '<th>HL sess</th><th>HL bars</th><th>Scale</th><th>Verdict</th>' +
-    '<th>R²</th><th>Drift</th><th>Why</th></tr>';
-  const body = rows.map(r => {
-    const dim = r.engine ? '' : ' style="opacity:0.55"';
-    return `<tr${dim}>` +
-      `<td>${r.ticker}</td>` +
-      `<td>${r.engine ? engShort(r.engine) : '—'}</td>` +
-      `<td>${n(r.timeframe)}</td>` +
-      `<td>${n(r.hl_sessions)}</td><td>${n(r.hl_bars)}</td>` +
-      `<td>${n(r.session_scale)}</td>` +
-      `<td>${n(r.theta_verdict)}</td>` +
-      `<td>${n(r.r2)}</td><td>${n(r.drift)}</td>` +
-      `<td style="font-size:11px;color:var(--text-dim)" ` +
-        `title="${esc(r.reason)}">${r.reason || ''}</td></tr>`;
-  }).join('');
-  const chg = (j.changed || []).map(c =>
-    `${c.ticker}: ${c.from || '(default)'} → ${c.to || 'cleared'}` +
-    `${c.mode ? ' + PAUSE' : ''}`).join('<br>') || '(none)';
-  const skp = (j.skipped || []).map(s =>
-    `${s.ticker}: ${s.reason}`).join('<br>');
-  $('asResults').innerHTML =
-    `<table><thead>${head}</thead><tbody>${body}</tbody></table>` +
-    `<div class="section-label">` +
-    `${j.applied ? 'Applied changes' : 'Would change'}</div>` +
-    `<div style="font-size:12px">${chg}</div>` +
-    (skp ? `<div class="section-label">Skipped (not on watchlist)</div>` +
-           `<div style="font-size:12px">${skp}</div>` : '') +
-    `<div style="margin-top:8px;font-size:11px;color:var(--text-dim)">
-       Assignment is arithmetic on the measured half-life; it never ranks
-       engines by P/L. Scale is the name's measured session length vs the
-       960-min extended model (~2.46 = trades regular hours only). '—' =
-       no home: no single theta governs the name, or its half-life falls
-       outside the 2–12 bar band every OU engine shares. Abstention is a
-       first-class answer.</div>`;
 }
 
 /* ── boot ── */

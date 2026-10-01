@@ -33,8 +33,6 @@ import backtester
 import baskets as bk
 import halflife as hlf
 import sectors as sec
-import assign as asg
-from engine_ou import ALLOW_SHORTS as _OU_ALLOW_SHORTS
 from backtest_run import _fetch as _bt_fetch, warmup_start
 
 
@@ -661,16 +659,17 @@ def reconcile_positions(source='scheduled'):
             # direction='short' (broker is truth; plan_exit knows to buy to
             # cover), rather than skipping it -- skipping would let pass 2
             # clear the state, the engine would see flat, and could pyramid
-            # a fresh short on top of the broker's. If ALLOW_SHORTS is off,
-            # its existence is alien (manual order or prior system): adopt
-            # it anyway so it can be closed through the normal path, but
-            # alert loudly.
+            # a fresh short on top of the broker's. A short SHARE position is
+            # always alien now: Ripster shorts with puts only, and the OU
+            # family that could sell shares short was deleted 2026-10-01. So
+            # adopt it anyway, so it can be closed through the normal path,
+            # but alert loudly.
             is_short = raw_qty < 0
-            if is_short and not _OU_ALLOW_SHORTS:
+            if is_short:
                 msg = (f'ALIEN SHORT SHARES at broker: {sym} qty {raw_qty}. '
-                       f'ALLOW_SHORTS is off, so this system did not open '
-                       f'it. Adopted as direction=short so manual sell can '
-                       f'cover it; investigate the origin.')
+                       f'No engine in this system opens short shares, so it '
+                       f'did not come from here. Adopted as direction=short '
+                       f'so manual sell can cover it; investigate the origin.')
                 print(f'[RECON][ALERT] {msg}')
                 cm.log_forensic('conn_event', event='alien_short_shares',
                                 status='ALERT', ticker=sym, detail=msg,
@@ -1746,22 +1745,9 @@ def _port_metrics(result):
 
 
 def _run_screen_job(params):
-    """Thread body: [optional OU gate] -> fetch -> parallel replay ->
+    """Thread body: fetch -> parallel replay ->
     per-symbol table + pooled portfolio -> optional two-pass Sharpe eval ->
     dated CSVs. Never raises out; all outcomes land in _scr_job.
-
-    OU GATE (ou_gate=True): before any P&L is simulated, every name's
-    pooled theta line is fit across ASSIGN_TFS_DEFAULT and snapped onto the
-    OU family by assign.py's arithmetic. Names with no clock (multi_scale /
-    no_spring / out-of-band) are EXCLUDED from the sim, and each survivor
-    replays on ITS OWN assigned engine via the engine-map path. This is the
-    characterize-first doctrine: the gate selects on a bar-level statistic
-    with ~3 orders of magnitude more samples than P&L, and the timeframe
-    comes from arithmetic, not search. Residual honesty note: the gate is
-    measured on the same window the P&L is graded on, so a name that
-    mean-reverted in-sample passes AND scores partly by the same luck. The
-    sharpe_weight split below does not seal that; only a walk-forward gate
-    would. Known, accepted, stated.
 
     Sizing (alloc_mode): 'pct' | 'dollars' | 'even' (capital / N).
     compound=True compounds each name's sleeve on its own realized P/L
@@ -1781,122 +1767,59 @@ def _run_screen_job(params):
         mode = params['alloc_mode']
         val = params['alloc_value']
         sharpe_w = bool(params.get('sharpe_weight'))
-        ou_gate = bool(params.get('ou_gate'))
         compound = bool(params.get('compound'))
         slippage = params['slippage_bps']
         _get = lambda: _scr_job
 
         gate = None
-        engine_of = None                 # {sym: engine_name} in pipeline mode
         macro = {}
 
-        if ou_gate:
-            # ── stage 1: measure clocks, assign engines, filter ──
-            theta_tfs = list(ASSIGN_TFS_DEFAULT)
-            stage1 = len(theta_tfs) + 1
-            by_symbol = {s: {} for s in symbols}
-            for i, tf in enumerate(theta_tfs, 1):
-                p_tf = _mk_progress(_scr_lock, _get, f'gate: fetching {tf}',
-                                    i, stage1)
-                p_tf.seed(len(symbols))
-                got = _hl_fetch(alpaca, symbols, tf, base_start, end,
-                                progress=p_tf)
-                for s in symbols:
-                    if got.get(s):
-                        by_symbol[s][tf] = got[s]
-            p_g = _mk_progress(_scr_lock, _get, 'gate: measuring clocks',
-                               stage1, stage1)
-            p_g.seed(len(symbols))
-            assignments = asg.assign_from_bars(by_symbol, progress=p_g)
-            if _stop_requested(_get, _scr_lock):
-                with _scr_lock:
-                    _scr_job = {'state': 'stopped', 'params': params,
-                                'finished': datetime.now(ET).isoformat()}
-                cm.log_forensic('conn_event', event='screen',
-                                status='stopped', detail=params['label'])
-                return
-            passed = [a for a in assignments if a['engine']]
-            gate = {'n_measured': len(assignments), 'n_passed': len(passed),
-                    'timeframes': theta_tfs, 'assignments': assignments}
-            engine_of = {a['ticker']: a['engine'] for a in passed}
-            engine_display = 'ou_pipeline'
+        # The OU half-life gate lived here until 2026-10-01: it
+        # measured every name's clock, assigned each onto the OU
+        # family by arithmetic, and replayed each on its own engine.
+        # It went with the OU family. ou_gate is now refused at the
+        # route, so this path is the only one.
+        engine = registry.get(params['engine'])
+        engine_display = engine.name
+        has_macro = 'macro' in engine.timeframes
+        n_fetch = 2 if has_macro else 1
+        n_phases = n_fetch + 1 + (3 if sharpe_w else 0)
 
-            if not passed:
-                with _scr_lock:
-                    _scr_job = {'state': 'done', 'params': params,
-                                'table': [], 'n_screened': 0, 'csv': '',
-                                'portfolio': None, 'sizing': '',
-                                'sharpe_eval': None, 'gate': gate,
-                                'engine_display': engine_display,
-                                'low_sample_floor': LOW_SAMPLE_FLOOR,
-                                'skipped_no_data': [], 'errors': {},
-                                'finished': datetime.now(ET).isoformat()}
-                cm.log_forensic('conn_event', event='screen', status='done',
-                                detail=f"{params['label']}: OU gate passed "
-                                       f"0/{len(assignments)}; no sim")
-                return
-
-            # ── stage 2: sim-grade fetch per assigned engine's stream ──
-            by_stream = {}
-            for t, en in engine_of.items():
-                e = registry.get(en)
-                key = (e.timeframes['primary'],
-                       e.history.get('primary', 300))
-                by_stream.setdefault(key, []).append(t)
-            used = sorted(by_stream.items(),
-                          key=lambda kv: hlf.TF_MINUTES[kv[0][0]])
-            n_phases = stage1 + len(used) + 1 + (3 if sharpe_w else 0)
-            bars = {}
-            for j, ((tf, nbars), syms) in enumerate(used):
-                pj = _mk_progress(_scr_lock, _get, f'fetching {tf} (sim)',
-                                  stage1 + 1 + j, n_phases)
-                pj.seed(len(syms))
-                got = _bt_fetch(alpaca, syms, tf,
-                                warmup_start(base_start, tf, nbars), end,
-                                progress=pj)
-                bars.update(got)
-            replay_slot = stage1 + len(used) + 1
-            pool = list(engine_of)
-        else:
-            engine = registry.get(params['engine'])
-            engine_display = engine.name
-            has_macro = 'macro' in engine.timeframes
-            n_fetch = 2 if has_macro else 1
-            n_phases = n_fetch + 1 + (3 if sharpe_w else 0)
-
-            tf_p = engine.timeframes['primary']
-            n_p = engine.history.get('primary', 300)
-            start = warmup_start(base_start, tf_p, n_p)
-            p_primary = _mk_progress(_scr_lock, _get, f'fetching {tf_p}',
-                                     1, n_phases)
-            p_primary.seed(len(symbols))
-            bars = _bt_fetch(alpaca, symbols, tf_p, start, end,
-                             progress=p_primary)
-            if has_macro:
-                tf_m = engine.timeframes['macro']
-                n_m = engine.history.get('macro', 200)
-                m_start = warmup_start(base_start, tf_m, n_m)
-                p_macro = _mk_progress(_scr_lock, _get, f'fetching {tf_m}',
-                                       2, n_phases)
-                p_macro.seed(len(symbols))
-                macro = _bt_fetch(alpaca, symbols, tf_m, m_start, end,
-                                  progress=p_macro)
-            replay_slot = n_fetch + 1
-            pool = symbols
+        tf_p = engine.timeframes['primary']
+        n_p = engine.history.get('primary', 300)
+        start = warmup_start(base_start, tf_p, n_p)
+        p_primary = _mk_progress(_scr_lock, _get, f'fetching {tf_p}',
+                                 1, n_phases)
+        p_primary.seed(len(symbols))
+        bars = _bt_fetch(alpaca, symbols, tf_p, start, end,
+                         progress=p_primary)
+        if has_macro:
+            tf_m = engine.timeframes['macro']
+            n_m = engine.history.get('macro', 200)
+            m_start = warmup_start(base_start, tf_m, n_m)
+            p_macro = _mk_progress(_scr_lock, _get, f'fetching {tf_m}',
+                                   2, n_phases)
+            p_macro.seed(len(symbols))
+            macro = _bt_fetch(alpaca, symbols, tf_m, m_start, end,
+                              progress=p_macro)
+        replay_slot = n_fetch + 1
+        pool = symbols
 
         live = [s for s in pool if bars.get(s)]
         if not live:
             raise RuntimeError('no symbols returned any primary bars')
 
         def _sim_engine(subset):
-            """Engine argument for a run over `subset` symbols."""
-            if ou_gate:
-                return {s: engine_of[s] for s in subset}
+            """Engine argument for a run over `subset` symbols.
+
+            Used to return a {symbol: engine} map when the OU gate assigned a
+            different engine per name. One engine runs the whole universe now,
+            so it is one name -- but backtester.run_basket still accepts the
+            map form, which is what a second engine would use again."""
             return params['engine']
 
         def _pdepth(s):
-            en = engine_of[s] if ou_gate else params['engine']
-            e = registry.get(en)
+            e = registry.get(params['engine'])
             return e.timeframes['primary'], e.history.get('primary', 300)
 
         # ── sizing ──
@@ -1941,7 +1864,7 @@ def _run_screen_job(params):
                 pf = None
             table.append({
                 'ticker': sym,
-                'engine': engine_of.get(sym) if ou_gate else engine_display,
+                'engine': engine_display,
                 'sector': s_sec or '', 'subsector': s_sub or '',
                 'n_trades': n, 'sharpe': m.get('sharpe'),
                 'sortino': m.get('sortino'), 'expectancy': m.get('expectancy'),
@@ -2100,7 +2023,7 @@ def _run_screen_job(params):
         cm.log_forensic('conn_event', event='screen', status='done',
                         detail=f"{params['label']} {eng_tag}: {len(table)} "
                                f"names, {len(missing)} no-data, sizing "
-                               f"{mode}" + (', gated' if ou_gate else '')
+                               f"{mode}"
                                + (', compounded' if compound else '')
                                + (', sharpe eval' if sharpe_w else ''))
     except Exception as e:
@@ -2129,8 +2052,7 @@ def screen_route():
 
     POST body: {basket | symbols[] | sector (+subsector?), engine?, start,
     end?, capital?, alloc_mode? ('pct'|'dollars'|'even'), alloc_value?,
-    ou_gate? (bool: half-life gate + per-name engine assignment; engine is
-    ignored), compound? (bool: per-sleeve compounding), sharpe_weight?,
+    compound? (bool: per-sleeve compounding), sharpe_weight?,
     slippage_bps?}. Legacy alloc_pct still accepted as mode 'pct'.
     No source = the whole universe. One job at a time.
     """
@@ -2172,17 +2094,13 @@ def screen_route():
     if not body.get('start'):
         return jsonify({'error': 'start (YYYY-MM-DD) required'}), 400
 
-    ou_gate = bool(body.get('ou_gate', False))
-    if ou_gate:
-        eng_name = None
-        n_gate = len(symbols) * len(ASSIGN_TFS_DEFAULT)
-        if n_gate > HL_MAX_FETCHES:
-            return jsonify({'error': f'OU gate: {len(symbols)} symbols x '
-                                     f'{len(ASSIGN_TFS_DEFAULT)} timeframes '
-                                     f'= {n_gate} fetches, over the '
-                                     f'{HL_MAX_FETCHES} cap. Screen a '
-                                     f'subsector or a basket.'}), 400
-    else:
+    # Refused rather than ignored: a caller asking for a gate that no longer
+    # exists should be told, not quietly handed an ungated run.
+    if bool(body.get('ou_gate', False)):
+        return jsonify({'error': 'the OU half-life gate was removed with the '
+                                 'OU engine family on 2026-10-01; there are '
+                                 'no engines left to assign'}), 400
+    if True:
         eng_name = body.get('engine') or resolver.default_name
         if eng_name not in registry.names():
             return jsonify({'error': f'unknown engine: {eng_name}'}), 400
@@ -2216,7 +2134,6 @@ def screen_route():
               'start': body['start'], 'end': body.get('end'),
               'capital': capital,
               'alloc_mode': mode, 'alloc_value': val,
-              'ou_gate': ou_gate,
               'compound': bool(body.get('compound', False)),
               'sharpe_weight': sharpe_weight,
               'slippage_bps': float(body.get('slippage_bps', 2.0))}
@@ -2243,238 +2160,11 @@ def screen_control():
     return jsonify({'ok': True, 'state': nxt})
 
 
-# ─── MULTI-TIMEFRAME FETCH (shared by the OU gate and engine assignment) ─────
-# One symbol x one timeframe = one fetch, sized from hlf.bars_needed() because
-# the theta fit only reads its last max(window) bars. The dedicated half-life
-# estimator card/routes were folded into the screener's OU gate; the module's
-# estimation machinery is untouched and this fetch helper is its front door.
-
-# Guardrail against a 500-name sweep across 12 timeframes quietly turning
-# into 6,000 API calls.
-HL_MAX_FETCHES = 400
-
-
-def _hl_fetch(alpaca_, symbols, tf, start, end, progress=None):
-    """Bars for one timeframe, sized to what the fit actually consumes.
-
-    The estimator's largest window for `tf` is all the history it reads, so
-    we request that many bars (plus headroom) and no more. `start` still
-    clamps the window: a user asking for 2020 onward on 1Day gets 2020
-    onward; asking for 2020 on 1Min gets the most recent slice that the
-    1-min fit can use, because six years of 1-min bars is ~500k rows the
-    fit would throw away."""
-    need = hlf.bars_needed(tf)
-    tf_min = hlf.TF_MINUTES[tf]
-    anchor = end or datetime.now()
-    days = max(2, int(need * tf_min / 390 * 3) + 2)
-    eff_start = max(start, anchor - timedelta(days=days))
-    got = alpaca_.get_bars_multi(symbols, timeframe=tf, limit=need,
-                                 start=eff_start, progress=progress)
-    if end is None:
-        return got
-    out = {}
-    for sym, bars_ in got.items():
-        out[sym] = [b for b in bars_
-                    if datetime.fromisoformat(b['time']).date() <= end.date()]
-    return out
-
-
-# ─── ENGINE ASSIGNMENT (theta line -> OU family, deterministic) ───────────────
-# Fetches multi-timeframe bars, fits the pooled theta line per name, snaps
-# each 'ou' name onto the OU family by arithmetic (assign.py), and -- only on
-# apply=true -- writes the result into the CONFIG WATCHLIST, the one store
-# _sync_engine_overrides preserves across sweeps. Dry-run by default: the
-# table and the would-be diff come back, nothing is written. Names not on
-# the watchlist are reported, never auto-deployed; deploying stays a human
-# decision (basket deploy).
-
-_as_lock = threading.Lock()
-_as_job = {'state': 'idle'}
-
-# theta_line needs >=2 usable timeframes and rewards a spread of bar sizes.
-# 1Min/2Min are its bid-ask-bounce control group and excluded from the fit
-# by default, so they are not worth fetching here.
-ASSIGN_TFS_DEFAULT = ('10Min', '30Min', '1Hour', '2Hour', '1Day')
-
-
-def _run_assign_job(params):
-    """Thread body: per-timeframe fetch -> theta line -> assignment table ->
-    dry-run diff or config write-through. Never raises out."""
-    global _as_job
-    try:
-        symbols = params['symbols']
-        tfs = params['timeframes']
-        start = datetime.strptime(params['start'], '%Y-%m-%d')
-        end = (datetime.strptime(params['end'], '%Y-%m-%d')
-               if params.get('end') else None)
-
-        by_symbol = {s: {} for s in symbols}
-        n_phases = len(tfs) + 1
-        _get = lambda: _as_job
-        for i, tf in enumerate(tfs, 1):
-            p_tf = _mk_progress(_as_lock, _get, f'fetching {tf}', i, n_phases)
-            p_tf.seed(len(symbols))
-            got = _hl_fetch(alpaca, symbols, tf, start, end, progress=p_tf)
-            for s in symbols:
-                if got.get(s):
-                    by_symbol[s][tf] = got[s]
-
-        p_as = _mk_progress(_as_lock, _get, 'fitting theta lines',
-                            n_phases, n_phases)
-        p_as.seed(len(symbols))
-        assignments = asg.assign_from_bars(by_symbol, progress=p_as)
-
-        if _stop_requested(lambda: _as_job, _as_lock):
-            with _as_lock:
-                _as_job = {'state': 'stopped', 'params': params,
-                           'finished': datetime.now(ET).isoformat()}
-            cm.log_forensic('conn_event', event='assign', status='stopped',
-                            detail=params['label'])
-            return
-
-        apply_now = bool(params.get('apply'))
-        cfg = cm.load_config()
-        diff = asg.apply_assignments(cfg, assignments, dry_run=not apply_now)
-        if apply_now and diff['changed']:
-            cm.save_config(cfg)
-            _sync_engine_overrides(cfg)
-            for c in diff['changed']:
-                cm.log_forensic(
-                    'conn_event', event='assign_apply', status='ok',
-                    ticker=c['ticker'],
-                    detail=f"{c.get('from')} -> {c.get('to')}"
-                           + (' (paused)' if c.get('mode') else ''))
-
-        csv_path = ''
-        if assignments:
-            import csv as _csv
-            csv_path = os.path.join(
-                cm.DATA_DIR,
-                f"assign_{params['label']}_"
-                f"{datetime.now():%Y%m%d_%H%M%S}.csv")
-            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-                w = _csv.DictWriter(f, fieldnames=list(assignments[0].keys()))
-                w.writeheader()
-                w.writerows(assignments)
-
-        n_assigned = sum(1 for a in assignments if a['engine'])
-        with _as_lock:
-            _as_job = {'state': 'done', 'params': params,
-                       'assignments': assignments,
-                       'n_assigned': n_assigned,
-                       'n_names': len(assignments),
-                       'applied': apply_now,
-                       'changed': diff['changed'],
-                       'skipped': diff['skipped'],
-                       'csv': csv_path,
-                       'finished': datetime.now(ET).isoformat()}
-        cm.log_forensic('conn_event', event='assign', status='done',
-                        detail=f"{params['label']}: {n_assigned}/"
-                               f"{len(assignments)} assigned, "
-                               f"{len(diff['changed'])} change(s), "
-                               f"{'APPLIED' if apply_now else 'dry-run'}")
-    except Exception as e:
-        with _as_lock:
-            _as_job = {'state': 'error', 'params': params, 'error': str(e)}
-        cm.log_forensic('conn_event', event='assign', status='error',
-                        error=str(e))
-
-
-@app.route('/api/assign/bands')
-def assign_bands():
-    """The OU family's resolvable half-life bands in sessions (960-min
-    extended-hours model) plus the snap target, so the UI never hardcodes
-    what assign.py knows."""
-    return jsonify({'bands': asg.bands(),
-                    'target_hl_bars': round(asg.TARGET_HL_BARS, 3),
-                    'default_timeframes': list(ASSIGN_TFS_DEFAULT)})
-
-
-@app.route('/api/assign', methods=['GET', 'POST'])
-def assign_route():
-    """GET: current assignment job (table + diff). POST: start one.
-    Body: {basket | symbols[] | sector (+subsector?), start, end?,
-    timeframes?, apply?: bool}. apply=false (the default) is a dry run.
-    One job at a time; 409 if busy."""
-    global _as_job
-    if request.method == 'GET':
-        with _as_lock:
-            return jsonify(_with_elapsed(_as_job))
-
-    if not alpaca.is_connected():
-        return jsonify({'error': 'not connected'}), 400
-    with _as_lock:
-        if _job_busy(_as_job):
-            return jsonify({'error': 'assignment already running',
-                            'params': _as_job.get('params')}), 409
-
-    body = request.json or {}
-    if body.get('basket'):
-        try:
-            b = bk.get_basket(body['basket'])
-        except KeyError as e:
-            return jsonify({'error': str(e)}), 404
-        symbols, label = b['symbols'], body['basket']
-    elif body.get('sector'):
-        try:
-            symbols = sec.tickers_for(body['sector'],
-                                      body.get('subsector') or None)
-        except KeyError as e:
-            return jsonify({'error': str(e)}), 404
-        label = body.get('subsector') or body['sector']
-    else:
-        symbols = [str(s).strip().upper() for s in body.get('symbols', [])
-                   if str(s).strip()]
-        label = 'adhoc'
-    if not symbols:
-        return jsonify({'error': 'no symbols'}), 400
-    if not body.get('start'):
-        return jsonify({'error': 'start (YYYY-MM-DD) required'}), 400
-
-    tfs = body.get('timeframes') or list(ASSIGN_TFS_DEFAULT)
-    unknown = [t for t in tfs if t not in hlf.TF_MINUTES]
-    if unknown:
-        return jsonify({'error': f'unknown timeframe(s): {unknown}; '
-                                 f'have {list(hlf.TF_MINUTES)}'}), 400
-    tfs = [t for t in hlf.TIMEFRAMES if t in set(tfs)]
-    if len(tfs) < 2:
-        return jsonify({'error': 'theta line needs at least 2 '
-                                 'timeframes'}), 400
-
-    n_fetches = len(symbols) * len(tfs)
-    if n_fetches > HL_MAX_FETCHES:
-        return jsonify({'error': f'{len(symbols)} symbols x {len(tfs)} '
-                                 f'timeframes = {n_fetches} fetches, over the '
-                                 f'{HL_MAX_FETCHES} cap. Narrow the basket or '
-                                 f'the timeframe list.'}), 400
-
-    label = ''.join(c if c.isalnum() else '_' for c in label)
-    params = {'symbols': symbols, 'label': label, 'timeframes': tfs,
-              'start': body['start'], 'end': body.get('end'),
-              'apply': bool(body.get('apply', False))}
-    with _as_lock:
-        _as_job = {'state': 'running', 'params': params,
-                   'n_symbols': len(symbols),
-                   'started': datetime.now(ET).isoformat()}
-    threading.Thread(target=_run_assign_job, args=(params,),
-                     daemon=True).start()
-    return jsonify({'started': True, 'n_symbols': len(symbols),
-                    'params': params})
-
-
-@app.route('/api/assign/control', methods=['POST'])
-def assign_control():
-    """{action: pause|resume|stop}. stop discards before any config write;
-    an already-applied write cannot be rolled back here."""
-    global _as_job
-    action = (request.json or {}).get('action')
-    with _as_lock:
-        nxt, err = _apply_control(_as_job, action)
-        if err:
-            return jsonify({'error': err}), 409
-        _as_job['state'] = nxt
-    return jsonify({'ok': True, 'state': nxt})
-
+# THE ENGINE ASSIGNMENT JOB AND ITS ROUTES WERE DELETED 2026-10-01 with
+# the OU family they existed to assign: /api/assign, /api/assign/bands,
+# /api/assign/control, _run_assign_job and the _as_job state. assign.py
+# went too. Nothing replaced them -- per-stock strategy choice is moving
+# to the Trade Desk (board d-signal-hub), which owns it outright.
 
 @app.route('/api/watchlist', methods=['GET', 'POST'])
 def watchlist():

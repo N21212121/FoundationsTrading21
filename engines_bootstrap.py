@@ -10,17 +10,18 @@ it here, optionally point tickers or a basket at it. Nothing else changes.
 """
 from engine_registry import EngineRegistry, EngineResolver
 from engine_ripster import RipsterEMACloudEngine
-from engine_ou import FAMILY as OU_FAMILY, OUReversionEngine
 
 registry = EngineRegistry()
 registry.register(RipsterEMACloudEngine())
-# The OU family: one engine per bar size. A half-life of 2-12 BARS is a
-# different amount of real time at each, so each variant sees a different
-# slice of the universe. Assignment is deterministic (assign.py) and never
-# looks at P&L.
-for _cls in OU_FAMILY:
-    registry.register(_cls())
-registry.register(OUReversionEngine())      # legacy alias == ou_reversion_1d
+
+# THE OU REVERSION FAMILY WAS DELETED 2026-10-01 at Nate's instruction -- a
+# deliberate restart before a new strategy is written, not a bug fix. Six
+# variants (one per bar size), engine_ou.py, and assign.py went with it.
+# What that removed, so nobody looks for it: the half-life estimator's only
+# consumer, the /api/assign routes, the Engine Assignment card, and the
+# screener's OU pipeline gate. halflife.py itself STAYS -- its TF_MINUTES and
+# tf_minutes are bar-width arithmetic the whole app depends on, and only
+# estimate/classify/theta_line are now unused.
 
 # Global default: every ticker runs the faithful Ripster engine until told
 # otherwise. Overrides, when you want them:
@@ -29,9 +30,8 @@ registry.register(OUReversionEngine())      # legacy alias == ou_reversion_1d
 #   resolver.assign('AAPL', 'swing_sleeve')
 #   resolver.set_ticker('NVDA', 'gex_scalper')
 #
-# The two engines hold OPPOSITE theses and must never both be mounted on the
-# same ticker. Use characterize() to sort names into a trending sleeve and a
-# reverting sleeve, read the table yourself, and assign. Never let a loop rank
-# engines per ticker and mount the winner: that is one overfit per name.
+# ONE engine is registered today. The invariant still stands for whatever
+# comes next: never let a loop rank engines per ticker and mount the winner,
+# because that is one overfit per name. Measure, assign by arithmetic, freeze.
 #
 resolver = EngineResolver(registry, default_name='ripster_ema_cloud')
